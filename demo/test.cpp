@@ -70,10 +70,15 @@ main(int argc, char* argv[])
     while( true) {
 
         printf("PEMonitor Demo :\n");
+        printf("-----------------------------------------\n");
+        printf("0. Exit\n");
         printf("1. Deny Notepad.exe\n");
         printf("2. Deny FFI's unarc.dll\n");
         printf("3. Deny Filemon's Driver(FILEMxxx.SYS)\n");
-        printf("0. Exit\n");
+        printf("4. Deny Applications from CDROM\n");
+        printf("5. Deny Applications from USB\n");
+        printf("6. Deny Applications from SMB Share\n");
+        printf("-----------------------------------------\n");
         printf("Please Press Number: ");
 
         int response = 0;
@@ -91,6 +96,12 @@ main(int argc, char* argv[])
             ioctl = IOCTL_DEMO_DENY_FFI;
         } else if (response == 3) {
             ioctl = IOCTL_DEMO_DENY_FILEMON;
+        } else if (response == 4) {
+            ioctl = IOCTL_DEMO_DENY_CDROM;
+        } else if (response == 5) {
+            ioctl = IOCTL_DEMO_DENY_USB;
+        } else if (response == 6) {
+            ioctl = IOCTL_DEMO_DENY_SMB;
         } else {
             continue;
         }

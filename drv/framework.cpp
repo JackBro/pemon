@@ -103,6 +103,25 @@ OnDemoDeny(ULONG ProcessId,
             NULL != RtlSearchString(FullImagePath, L"FILEM", FALSE)) {
             IsAllow = FALSE;
         }
+
+    } else if (ioctl == IOCTL_DEMO_DENY_CDROM) {
+
+        if (DeviceType == DT_CDROM) {
+            IsAllow = FALSE;
+        }
+
+    } else if (ioctl == IOCTL_DEMO_DENY_USB) {
+
+        if (DeviceType == DT_USB) {
+            IsAllow = FALSE;
+        }
+
+    } else if (ioctl == IOCTL_DEMO_DENY_SMB) {
+
+        if (DeviceType == DT_REMOTE) {
+            IsAllow = FALSE;
+        }
+        
     } 
 
     DbgPrint("[pefilter]%S, %wZ, %wZ, %wZ\n\n",
@@ -129,30 +148,18 @@ NTSTATUS DispatchIoctl(PDEVICE_OBJECT pDevObj, PIRP pIrp)
     switch(uIoControlCode)
     {
     case IOCTL_DEMO_DENY_NOTEPAD:
+    case IOCTL_DEMO_DENY_FFI:
+    case IOCTL_DEMO_DENY_FILEMON:
+    case IOCTL_DEMO_DENY_CDROM:
+    case IOCTL_DEMO_DENY_USB:
+    case IOCTL_DEMO_DENY_SMB:
 
         //nothing
-        if (SetupImageNotify(OnDemoDeny, (PVOID*)IOCTL_DEMO_DENY_NOTEPAD)) {
+        if (SetupImageNotify(OnDemoDeny, (PVOID*)uIoControlCode)) {
             status = STATUS_SUCCESS;    
         } else {
             status = STATUS_UNSUCCESSFUL;
         }
-        break;
-
-    case IOCTL_DEMO_DENY_FFI:
-        if (SetupImageNotify(OnDemoDeny, (PVOID*)IOCTL_DEMO_DENY_FFI)) {
-            status = STATUS_SUCCESS;
-        } else {
-            status = STATUS_UNSUCCESSFUL;
-        }
-        break;
-
-    case IOCTL_DEMO_DENY_FILEMON:
-        if (SetupImageNotify(OnDemoDeny, (PVOID*)IOCTL_DEMO_DENY_FILEMON)) {
-            status = STATUS_SUCCESS;
-        } else {
-            status = STATUS_UNSUCCESSFUL;
-        }
-
         break;
 
     default:

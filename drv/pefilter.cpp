@@ -1,12 +1,13 @@
 
-
-#include <ntddk.h>
+#include <ntifs.h>
+//#include <dsm.h>
+#include <ntddstor.h>
 #include <ntimage.h>
 #include "pefilter.h"
 #include "ntpath.h"
 
 extern DEVICE_OBJECT* g_devobj;
-
+/*
 //
 // IoControlCode values for storage devices
 //
@@ -175,7 +176,7 @@ typedef struct _STORAGE_PROPERTY_QUERY {
     UCHAR  AdditionalParameters[1];
 
 } STORAGE_PROPERTY_QUERY, *PSTORAGE_PROPERTY_QUERY;
-
+*/
 BOOLEAN VxkCopyMemory( PVOID pDestination, PVOID pSourceAddress, SIZE_T SizeOfCopy )
 {
     PMDL pMdl = NULL;
@@ -294,70 +295,25 @@ void DenyLoadDll(PVOID EntryPoint)
     SafeCopyMemory((ULONG)EntryPoint, (ULONG)fuck, sizeof(fuck));     
 }
 
+/*
+NTSTATUS CompletionRoutine(PDEVICE_OBJECT DeviceObject,
 
-PDEVICE_OBJECT
-IoGetBaseFileSystemDeviceObject(
-    IN PFILE_OBJECT FileObject
-    )
-
-/*++
-
-Routine Description:
-
-    This routine returns the base (lowest-level) file system volume device
-    object associated with a file.  I.e., it locates the file system w/o
-    walking the attached device object list.
-
-Arguments:
-
-    FileObject - Supplies a pointer to the file object for which the base
-        file system device object is to be returned.
-
-Return Value:
-
-    The function value is the lowest level volume device object associated
-    w/the file.
-
---*/
+                                 PIRP Irp, PVOID Context)
 
 {
-    PDEVICE_OBJECT deviceObject;
 
-    //
-    // If the file object has a mounted Vpb, use its DeviceObject.
-    //
+  if(Irp->PendingReturned)
 
-    if (FileObject->Vpb != NULL && FileObject->Vpb->DeviceObject != NULL) {
-        deviceObject = FileObject->Vpb->DeviceObject;
+  {
 
-    //
-    // Otherwise, if the real device has a VPB that indicates that it is
-    // mounted, then use the file system device object associated with the
-    // VPB.
-    //
+     KeSetEvent((PRKEVENT)Context, IO_NO_INCREMENT, FALSE);
 
-    } else if (!(FileObject->Flags & FO_DIRECT_DEVICE_OPEN) &&
-               FileObject->DeviceObject->Vpb != NULL &&
-               FileObject->DeviceObject->Vpb->DeviceObject != NULL) {
+  }
 
-        deviceObject = FileObject->DeviceObject->Vpb->DeviceObject;
 
-    //
-    // Otherwise, just return the real device object.
-    //
 
-    } else {
+  return STATUS_MORE_PROCESSING_REQUIRED;
 
-        deviceObject = FileObject->DeviceObject;
-    }
-
-    ASSERT( deviceObject != NULL );
-
-    //
-    // Simply return the resultant file object.
-    //
-
-    return deviceObject;
 }
 
 
@@ -366,15 +322,16 @@ QueryDeviceType(PDEVICE_OBJECT DiskDeviceObject,BOOLEAN* IsUSBVolume)
 { 
     NTSTATUS status = STATUS_UNSUCCESSFUL; 
     KEVENT WaitEvent; 
-    STORAGE_PROPERTY_QUERY Query; 
+    
     PIRP Irp; 
-    UCHAR pBuffer[512]; 
-    PSTORAGE_DEVICE_DESCRIPTOR Descriptor; 
+    UCHAR pBuffer[512] = {0}; 
+     
     IO_STATUS_BLOCK IoStatus; 
 
     PAGED_CODE(); 
 
        // first set the query properties
+    STORAGE_PROPERTY_QUERY Query; 
    Query.PropertyId = StorageDeviceProperty;
    Query.QueryType = PropertyStandardQuery;
 
@@ -392,6 +349,9 @@ QueryDeviceType(PDEVICE_OBJECT DiskDeviceObject,BOOLEAN* IsUSBVolume)
         return status; 
     } 
 
+    IoSetCompletionRoutine(Irp, CompletionRoutine,
+
+                  &WaitEvent, TRUE, TRUE, TRUE);
     status = IoCallDriver(DiskDeviceObject, Irp); 
     if (status == STATUS_PENDING) 
     { 
@@ -405,15 +365,160 @@ QueryDeviceType(PDEVICE_OBJECT DiskDeviceObject,BOOLEAN* IsUSBVolume)
         return status; 
     }
 
+    PSTORAGE_DEVICE_DESCRIPTOR Descriptor;
     Descriptor = (PSTORAGE_DEVICE_DESCRIPTOR)pBuffer; 
     if(Descriptor->BusType == BusTypeUsb) 
     { 
-        DbgPrint("GetStorageDeviceBusType SUCCEED: %d DevType:%x \n ", 
-            Descriptor->BusType, DiskDeviceObject->DeviceType); 
         *IsUSBVolume = TRUE; 
     } 
     return status; 
 }
+*/
+
+
+enum DISK_TYPE
+QueryDiskType(UNICODE_STRING* usPath)
+{
+    NTSTATUS status;
+
+    OBJECT_ATTRIBUTES oa = {0};
+     InitializeObjectAttributes (&oa, usPath, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+
+    IO_STATUS_BLOCK iosb = {0};
+    HANDLE  FileHandle = NULL;
+    status = ZwOpenFile (&FileHandle, 
+            GENERIC_READ | SYNCHRONIZE, 
+            &oa, &iosb, 
+            FILE_SHARE_READ|FILE_SHARE_DELETE,
+            FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE);
+    if (!NT_SUCCESS(status)) {
+        return DT_UNKNOWN;
+    }
+
+    FILE_OBJECT * FileObject = NULL;
+    status = ObReferenceObjectByHandle(FileHandle,
+                                    0,
+                                    *IoFileObjectType,
+                                    KernelMode,
+                                    (PVOID *) &FileObject,
+                                    NULL );
+    ZwClose(FileHandle);
+    FileHandle = NULL;
+    
+    if (!NT_SUCCESS(status)) {
+        return DT_UNKNOWN;
+    }
+
+    DEVICE_OBJECT* BaseFSDeviceObject = IoGetBaseFileSystemDeviceObject(FileObject);
+    ObDereferenceObject(FileObject);
+    FileObject = NULL;
+    if (BaseFSDeviceObject == NULL) {
+        return DT_UNKNOWN;
+    }
+
+    DEVICE_OBJECT* DiskDeviceObject = NULL;
+    status = IoGetDiskDeviceObject(BaseFSDeviceObject, &DiskDeviceObject);
+    if (!NT_SUCCESS(status)) {
+
+        // 如果是SMB共享，是没有Disk设备的
+        if (BaseFSDeviceObject->Characteristics & FILE_REMOTE_DEVICE) {
+            return DT_REMOTE;
+        } else {
+            return DT_UNKNOWN;
+        }
+    
+    } else {
+
+        if (DiskDeviceObject->Characteristics & FILE_REMOVABLE_MEDIA) {
+
+            if (RtlSearchString(usPath, L"\\Device\\CdRom", FALSE) == usPath->Buffer) {
+
+                return DT_CDROM;
+
+            } else {
+
+                return DT_USB;    
+            }
+            
+        } else if(DiskDeviceObject->Characteristics & FILE_READ_ONLY_DEVICE) {
+            
+            return DT_CDROM;
+
+        }  else {
+
+            return DT_DISK;
+        }
+    }
+}
+
+enum DISK_TYPE
+GuessUnknownDiskType(UNICODE_STRING* usPath)
+{
+    NTSTATUS    status;
+
+    UNICODE_STRING usVolumeName;
+    WCHAR VolumeNameBuffer[MAX_FILE_PATH] = {0};
+    RtlInitEmptyUnicodeString(&usVolumeName, VolumeNameBuffer, MAX_FILE_PATH);
+    status = DosNameToVolumeName(usPath, &usVolumeName);
+    if (NT_SUCCESS(status)) {
+
+        if (RtlSearchString(&usVolumeName, L"\\Device\\LanmanRedirector", FALSE) == usVolumeName.Buffer) {
+
+            return DT_REMOTE;
+
+        } else if (RtlSearchString(&usVolumeName, L"\\Device\\Harddisk", FALSE) == usVolumeName.Buffer) {
+
+            return DT_DISK;
+            
+        } else if (RtlSearchString(&usVolumeName, L"\\Device\\CdRom", FALSE) == usVolumeName.Buffer) {
+
+            return DT_CDROM;
+
+        } else {
+
+            return DT_UNKNOWN;
+        }
+
+    } else {
+        
+        return DT_REMOTE;
+    }
+
+}
+ 
+/*
+enum DISK_TYPE
+QueryDiskType(UNICODE_STRING* usPath)
+{
+    NTSTATUS    status;
+
+    FILE_OBJECT* FileObject = NULL;
+    DEVICE_OBJECT* FSDeviceObject = NULL;
+    status = IoGetDeviceObjectPointer(usPath, FILE_READ_DATA | SYNCHRONIZE | DELETE, &FileObject, &FSDeviceObject);
+    if (!NT_SUCCESS(status)) {
+        return FALSE;
+    }
+
+    DEVICE_OBJECT* BaseFSDeviceObject = IoGetBaseFileSystemDeviceObject(FileObject);
+    ObDereferenceObject(FileObject);
+    FileObject = NULL;
+    if (BaseFSDeviceObject == NULL) {
+        return FALSE;
+    }
+
+    DEVICE_OBJECT* DiskDeviceObject = NULL;
+    status = IoGetDiskDeviceObject(BaseFSDeviceObject, &DiskDeviceObject);
+    if (!NT_SUCCESS(status)) {
+        return FALSE;
+    }
+
+    if (DiskDeviceObject->Characteristics & FILE_REMOVABLE_MEDIA) {
+        return TRUE;
+    } else {
+        return FALSE;
+    }
+}
+*/
 
 BOOLEAN 
 GetImageType(PVOID ImageBase, enum IMAGE_TYPE* ImageType)
@@ -490,7 +595,7 @@ VOID LoadImageNotifyRoutine
 )
 {
     DbgPrint("[pefilter]LoadImageNotifyRoutine %wZ\n", FullImageName);
- if (g_devobj == NULL || g_devobj->DeviceExtension == NULL) {
+    if (g_devobj == NULL || g_devobj->DeviceExtension == NULL) {
         return;
     }
 
@@ -510,79 +615,54 @@ VOID LoadImageNotifyRoutine
   
         if (GetImageType(ImageInfo->ImageBase, &FileType)) {
 
-            //判断设备类型
-            FILE_OBJECT* FileObject = NULL;
-            DEVICE_OBJECT* DeviceObject = NULL;
+            
             NTSTATUS    status = 0;
-            BOOLEAN IsUsb = FALSE;
 
-                //status = QueryDeviceType(DeviceObject, &IsUsb);
+            //判断设备类型
+            enum DISK_TYPE DeviceType;
+            DeviceType = QueryDiskType(FullImageName);
+            if (DeviceType == DT_UNKNOWN) {
+                DeviceType = GuessUnknownDiskType(FullImageName);
+            }
 
-                enum DISK_TYPE DeviceType;
-                //if (IsUsb) {
-                //    DeviceType = DT_USB;
-                //} else {
-                    DeviceType = DT_DISK;
-                //}
+            WCHAR DosNameBuffer[MAX_FILE_PATH] = {0};
+            UNICODE_STRING usDosName = {0};
+            RtlInitEmptyUnicodeString(&usDosName, DosNameBuffer, MAX_FILE_PATH);
 
-                UNICODE_STRING usVolumeName;
-                WCHAR VolumeNameBuffer[MAX_FILE_PATH] = {0};
-                RtlInitEmptyUnicodeString(&usVolumeName, VolumeNameBuffer, MAX_FILE_PATH);
-                status = DosNameToVolumeName(FullImageName, &usVolumeName);
-                if (NT_SUCCESS(status)) {
+            UNICODE_STRING* usImagePath = NULL;
+            status = VolumeNameToDosName(FullImageName, &usDosName);
+            if(status == STATUS_SUCCESS) {
+                usImagePath = &usDosName;
+            } else {
+                usImagePath = FullImageName;
+            }
 
-                    if (RtlSearchString(&usVolumeName, L"\\Device\\LanmanRedirector", FALSE) == usVolumeName.Buffer) {
-                        DeviceType = DT_REMOTE;
-                    } else if (RtlSearchString(&usVolumeName, L"\\Device\\Harddisk", FALSE) == usVolumeName.Buffer) {
-                        DeviceType = DT_DISK;
-                    } else if (RtlSearchString(&usVolumeName, L"\\Device\\CdRom", FALSE) == usVolumeName.Buffer) {
-                        DeviceType = DT_CDROM;
-                    } else {
-                        DeviceType = DT_UNKNOWN;
-                    }
+            //调用回调函数
+            BOOLEAN IsDeny = !devExt->NotifyRoutine((ULONG)ProcessId, 
+                    usImagePath, 
+                    DeviceType, 
+                    FileType, devExt->Context);
 
-                } else {
-                    DeviceType = DT_REMOTE;
+            //根据回调函数， 决定是否加载
+            if (IsDeny) {
+
+                PVOID Entry = (PVOID)GetImageEntry(ImageInfo->ImageBase);
+
+                switch(FileType) {
+                case IMAGE_EXE:
+                    DenyLoadExecute(Entry);
+                    break;
+
+                case IMAGE_DLL:
+                    DenyLoadDll(Entry);
+                    break;
+
+                case IMAGE_SYS:
+                    DenyLoadDriver(Entry);
+                    break;
                 }
-
-                WCHAR DosNameBuffer[MAX_FILE_PATH] = {0};
-                UNICODE_STRING usDosName = {0};
-                RtlInitEmptyUnicodeString(&usDosName, DosNameBuffer, MAX_FILE_PATH);
-
-                UNICODE_STRING* usImagePath = NULL;
-                status = VolumeNameToDosName(FullImageName, &usDosName);
-                if(status == STATUS_SUCCESS) {
-                    usImagePath = &usDosName;
-                } else {
-                    usImagePath = FullImageName;
-                }
-
-                //调用回调函数
-                BOOLEAN IsDeny = !devExt->NotifyRoutine((ULONG)ProcessId, 
-                        usImagePath, 
-                        DeviceType, 
-                        FileType, devExt->Context);
-
-                //根据回调函数， 决定是否加载
-                if (IsDeny) {
-
-                    PVOID Entry = (PVOID)GetImageEntry(ImageInfo->ImageBase);
-
-                    switch(FileType) {
-                    case IMAGE_EXE:
-                        DenyLoadExecute(Entry);
-                        break;
-
-                    case IMAGE_DLL:
-                        DenyLoadDll(Entry);
-                        break;
-
-                    case IMAGE_SYS:
-                        DenyLoadDriver(Entry);
-                        break;
-                    }
-                    
-                } 
+                
+            } 
         
         }
     }
