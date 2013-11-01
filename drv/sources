@@ -1,0 +1,26 @@
+TARGETNAME=pefilter
+TARGETPATH=../build/$(_OBJ_DIR)
+TARGETTYPE=DRIVER
+WARNLEVEL=0
+C_DEFINES = $(C_DEFINES)
+
+!if $(FREEBUILD)
+MSC_WARNING_LEVEL=/W1
+!else
+MSC_WARNING_LEVEL=/W3
+!endif
+
+PRECOMPILED_CXX=1
+#PRECOMPILED_INCLUDE=StdAfx.h
+#PRECOMPILED_PCH=StdAfx.pch
+#PRECOMPILED_OBJ=StdAfx.obj
+
+
+#AMD64_SOURCES = \
+#		amd64\asm_x64.asm
+
+SOURCES= framework.cpp \
+	pefilter.cpp \
+	ntpath.cpp
+
+		

@@ -1,0 +1,27 @@
+TARGETNAME=demo
+TARGETPATH=../build/$(_OBJ_DIR)
+TARGETTYPE=PROGRAM
+USE_MSVCRT=1
+UMTYPE=console
+
+!if $(FREEBUILD)
+MSC_WARNING_LEVEL=/W1
+!else
+MSC_WARNING_LEVEL=/W3
+!endif
+
+
+C_DEFINES = $(C_DEFINES)
+
+#AMD64_SOURCES = \
+#		amd64\asm_x64.asm
+
+SOURCES= test.cpp \
+	install.cpp
+
+TARGETLIBS=$(TARGETLIBS)                   \
+        $(SDK_LIB_PATH)\strsafe.lib     \
+        $(SDK_LIB_PATH)\kernel32.lib    \
+        $(SDK_LIB_PATH)\advapi32.lib    \
+
+
