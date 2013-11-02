@@ -574,8 +574,8 @@ VOID LoadImageNotifyRoutine
                     IMAGE_INFO_EX* ImageInfoEx = CONTAINING_RECORD(ImageInfo, IMAGE_INFO_EX, ImageInfo);
                     ImageFileObject = ImageInfoEx->FileObject;
                 }
-
             }
+            
             enum DISK_TYPE DeviceType;
             DeviceType = QueryDiskType(FullImageName, ImageFileObject);
             if (DeviceType == DT_UNKNOWN) {
