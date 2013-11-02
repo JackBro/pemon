@@ -221,41 +221,51 @@ QueryDeviceType(PDEVICE_OBJECT DiskDeviceObject,BOOLEAN* IsUSBVolume)
 
 
 enum DISK_TYPE
-QueryDiskType(UNICODE_STRING* usPath)
+QueryDiskType(UNICODE_STRING* usPath, FILE_OBJECT* ImageFileObject)
 {
     NTSTATUS status;
 
-    OBJECT_ATTRIBUTES oa = {0};
-     InitializeObjectAttributes (&oa, usPath, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    DEVICE_OBJECT* BaseFSDeviceObject = NULL;
 
-    IO_STATUS_BLOCK iosb = {0};
-    HANDLE  FileHandle = NULL;
-    status = ZwOpenFile (&FileHandle, 
-            GENERIC_READ | SYNCHRONIZE, 
-            &oa, &iosb, 
-            FILE_SHARE_READ|FILE_SHARE_DELETE,
-            FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE);
-    if (!NT_SUCCESS(status)) {
-        return DT_UNKNOWN;
+    if (ImageFileObject == NULL) {
+
+        OBJECT_ATTRIBUTES oa = {0};
+         InitializeObjectAttributes (&oa, usPath, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+
+        IO_STATUS_BLOCK iosb = {0};
+        HANDLE  FileHandle = NULL;
+        status = ZwOpenFile (&FileHandle, 
+                GENERIC_READ | SYNCHRONIZE, 
+                &oa, &iosb, 
+                FILE_SHARE_READ|FILE_SHARE_DELETE,
+                FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE);
+        if (!NT_SUCCESS(status)) {
+            return DT_UNKNOWN;
+        }
+
+        status = ObReferenceObjectByHandle(FileHandle,
+                                        0,
+                                        *IoFileObjectType,
+                                        KernelMode,
+                                        (PVOID *)&ImageFileObject,
+                                        NULL );
+        ZwClose(FileHandle);
+        FileHandle = NULL;
+        
+        if (!NT_SUCCESS(status)) {
+            return DT_UNKNOWN;
+        }
+
+        BaseFSDeviceObject = IoGetBaseFileSystemDeviceObject(ImageFileObject);
+        ObDereferenceObject(ImageFileObject);
+        ImageFileObject = NULL;
+
+    } else {
+
+        BaseFSDeviceObject = IoGetBaseFileSystemDeviceObject(ImageFileObject);
+
     }
 
-    FILE_OBJECT * FileObject = NULL;
-    status = ObReferenceObjectByHandle(FileHandle,
-                                    0,
-                                    *IoFileObjectType,
-                                    KernelMode,
-                                    (PVOID *) &FileObject,
-                                    NULL );
-    ZwClose(FileHandle);
-    FileHandle = NULL;
-    
-    if (!NT_SUCCESS(status)) {
-        return DT_UNKNOWN;
-    }
-
-    DEVICE_OBJECT* BaseFSDeviceObject = IoGetBaseFileSystemDeviceObject(FileObject);
-    ObDereferenceObject(FileObject);
-    FileObject = NULL;
     if (BaseFSDeviceObject == NULL) {
         return DT_UNKNOWN;
     }
@@ -275,7 +285,11 @@ QueryDiskType(UNICODE_STRING* usPath)
 
         if (DiskDeviceObject->Characteristics & FILE_REMOVABLE_MEDIA) {
 
-            if (RtlSearchString(usPath, L"\\Device\\CdRom", FALSE) == usPath->Buffer) {
+            UNICODE_STRING usCdrom = {0};
+            RtlInitUnicodeString(&usCdrom, L"\\Driver\\cdrom");
+
+            if (DiskDeviceObject->DriverObject != NULL &&
+                RtlCompareUnicodeString(&usCdrom, &DiskDeviceObject->DriverObject->DriverName, FALSE) == 0) {
 
                 return DT_CDROM;
 
@@ -379,16 +393,41 @@ GetImageType(PVOID ImageBase, enum IMAGE_TYPE* ImageType)
     pNTHeader = (PIMAGE_NT_HEADERS)((ULONG)ImageBase + pDOSHeader->e_lfanew);
 #endif
 
-    if (pNTHeader->FileHeader.Characteristics & IMAGE_FILE_DLL) {
+    switch(pNTHeader->FileHeader.Machine) {
+    case IMAGE_FILE_MACHINE_I386: {
 
-        *ImageType = IMAGE_DLL;
+        if (pNTHeader->OptionalHeader.Subsystem == IMAGE_SUBSYSTEM_NATIVE) {
 
-    } else if (pNTHeader->OptionalHeader.Subsystem == IMAGE_SUBSYSTEM_NATIVE) {
+            *ImageType = IMAGE_PE32_SYS;
 
-        *ImageType = IMAGE_SYS;
-    } else {
+        } else if (pNTHeader->FileHeader.Characteristics & IMAGE_FILE_DLL) {
 
-        *ImageType = IMAGE_EXE;
+            *ImageType = IMAGE_PE32_DLL;
+
+        } else {
+
+            *ImageType = IMAGE_PE32_EXE;
+        }
+        break; }
+    case IMAGE_FILE_MACHINE_AMD64: {
+
+        if (pNTHeader->OptionalHeader.Subsystem == IMAGE_SUBSYSTEM_NATIVE) {
+
+            *ImageType = IMAGE_PE64_SYS;
+
+        } else if (pNTHeader->FileHeader.Characteristics & IMAGE_FILE_DLL) {
+
+            *ImageType = IMAGE_PE64_DLL;
+
+        } else {
+
+            *ImageType = IMAGE_PE64_EXE;
+        }
+        break; }
+
+    default:
+        return FALSE;
+        break;
     }
 
     return TRUE;
@@ -430,6 +469,66 @@ PVOID GetImageEntry(PVOID ImageBase)
     return pEntryPoint;
 }
 
+typedef enum WIN_VER_DETAIL {
+    WINDOWS_VERSION_UNKNOWN,       // 0
+    WINDOWS_VERSION_2K,
+    WINDOWS_VERSION_XP,
+    WINDOWS_VERSION_2K3,
+    WINDOWS_VERSION_2K3_SP1_SP2,
+    WINDOWS_VERSION_VISTA,
+    WINDOWS_VERSION_7,
+} WIN_VER_DETAIL;
+
+typedef NTSTATUS (NTAPI * PFN_RtlGetVersion)(OUT PRTL_OSVERSIONINFOW lpVersionInformation);
+
+WIN_VER_DETAIL GetWindowsVersion()
+{
+    RTL_OSVERSIONINFOEXW OSVersionInfoEx = { sizeof(RTL_OSVERSIONINFOEXW) };
+    PFN_RtlGetVersion pfnRtlGetVersion = NULL;
+
+    UNICODE_STRING usFuncName = {0};
+    RtlInitUnicodeString(&usFuncName, L"RtlGetVersion"); 
+    pfnRtlGetVersion = (PFN_RtlGetVersion)MmGetSystemRoutineAddress(&usFuncName); 
+    if ( NULL == pfnRtlGetVersion)
+     {
+        PsGetVersion(&OSVersionInfoEx.dwMajorVersion,&OSVersionInfoEx.dwMinorVersion,
+             &OSVersionInfoEx.dwBuildNumber,NULL);
+     }
+    else
+    {
+        pfnRtlGetVersion((PRTL_OSVERSIONINFOW)&OSVersionInfoEx);
+     }
+
+    if (5 == OSVersionInfoEx.dwMajorVersion)
+     {
+        switch (OSVersionInfoEx.dwMinorVersion)
+         {
+        case 0:
+            return WINDOWS_VERSION_2K;
+        case 1:
+            return WINDOWS_VERSION_XP;
+        case 2:
+            if (0 == OSVersionInfoEx.wServicePackMajor)
+                return WINDOWS_VERSION_2K3;
+            else
+                 return WINDOWS_VERSION_2K3_SP1_SP2;
+         }
+     }
+    if (6 == OSVersionInfoEx.dwMajorVersion)
+     {
+        switch (OSVersionInfoEx.dwMinorVersion)
+         {
+        case 0:
+            return WINDOWS_VERSION_VISTA;
+        case 1:
+            return WINDOWS_VERSION_7;
+        default:
+            return WINDOWS_VERSION_7;
+        }
+     }
+    return WINDOWS_VERSION_UNKNOWN;
+}
+
 
 VOID LoadImageNotifyRoutine
 (
@@ -439,6 +538,11 @@ VOID LoadImageNotifyRoutine
 )
 {
     DbgPrint("[pefilter]LoadImageNotifyRoutine %wZ\n", FullImageName);
+
+    if (ProcessId == 0) {
+        DbgPrint("[pefilter]Found Driver\n");        
+    }
+
     if (g_devobj == NULL || g_devobj->DeviceExtension == NULL) {
         return;
     }
@@ -463,8 +567,17 @@ VOID LoadImageNotifyRoutine
             NTSTATUS    status = 0;
 
             //判断设备类型
+            FILE_OBJECT* ImageFileObject = NULL;
+            WIN_VER_DETAIL WinVer = GetWindowsVersion();
+            if (WinVer >= WINDOWS_VERSION_VISTA ) {
+                if (ImageInfo->ExtendedInfoPresent) {
+                    IMAGE_INFO_EX* ImageInfoEx = CONTAINING_RECORD(ImageInfo, IMAGE_INFO_EX, ImageInfo);
+                    ImageFileObject = ImageInfoEx->FileObject;
+                }
+
+            }
             enum DISK_TYPE DeviceType;
-            DeviceType = QueryDiskType(FullImageName);
+            DeviceType = QueryDiskType(FullImageName, ImageFileObject);
             if (DeviceType == DT_UNKNOWN) {
                 DeviceType = GuessUnknownDiskType(FullImageName);
             }
@@ -493,15 +606,18 @@ VOID LoadImageNotifyRoutine
                 PVOID Entry = (PVOID)GetImageEntry(ImageInfo->ImageBase);
 
                 switch(FileType) {
-                case IMAGE_EXE:
+                case IMAGE_PE32_EXE:
+                case IMAGE_PE64_EXE:
                     DenyLoadExecute(Entry);
                     break;
 
-                case IMAGE_DLL:
+                case IMAGE_PE32_DLL:
+                case IMAGE_PE64_DLL:
                     DenyLoadDll(Entry);
                     break;
 
-                case IMAGE_SYS:
+                case IMAGE_PE32_SYS:
+                case IMAGE_PE64_SYS:
                     DenyLoadDriver(Entry);
                     break;
                 }

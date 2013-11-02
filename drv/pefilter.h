@@ -24,9 +24,12 @@ enum DISK_TYPE
 
 enum IMAGE_TYPE
 {
-    IMAGE_EXE,
-    IMAGE_DLL,
-    IMAGE_SYS,
+    IMAGE_PE32_EXE,
+    IMAGE_PE32_DLL,
+    IMAGE_PE32_SYS,
+    IMAGE_PE64_EXE,
+    IMAGE_PE64_DLL,
+    IMAGE_PE64_SYS,  
 };
 
 typedef 

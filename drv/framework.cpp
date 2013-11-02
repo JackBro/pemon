@@ -69,12 +69,18 @@ OnDemoDeny(ULONG ProcessId,
     }
 
     UNICODE_STRING usImageType = {0};
-    if (ImageType == IMAGE_EXE) {
-        RtlInitUnicodeString(&usImageType,  L"EXE");
-    } else if (ImageType == IMAGE_DLL) {
-        RtlInitUnicodeString(&usImageType, L"DLL");
-    } else if (ImageType == IMAGE_SYS) {
-        RtlInitUnicodeString(&usImageType, L"SYS");
+    if (ImageType == IMAGE_PE32_EXE) {
+        RtlInitUnicodeString(&usImageType,  L"PE32_EXE");
+    } else if (ImageType == IMAGE_PE32_DLL) {
+        RtlInitUnicodeString(&usImageType, L"PE32_DLL");
+    } else if (ImageType == IMAGE_PE32_SYS) {
+        RtlInitUnicodeString(&usImageType, L"PE32_SYS");
+    } else if (ImageType == IMAGE_PE64_EXE) {
+        RtlInitUnicodeString(&usImageType,  L"PE64_EXE");
+    } else if (ImageType == IMAGE_PE64_DLL) {
+        RtlInitUnicodeString(&usImageType, L"PE64_DLL");
+    } else if (ImageType == IMAGE_PE64_SYS) {
+        RtlInitUnicodeString(&usImageType, L"PE64_SYS");
     } else {
         RtlInitUnicodeString(&usImageType, L"UNKNOWN");
     }
@@ -85,22 +91,22 @@ OnDemoDeny(ULONG ProcessId,
 
     if (ioctl == IOCTL_DEMO_DENY_NOTEPAD) {
 
-        if (ImageType == IMAGE_EXE && 
+        if ((ImageType == IMAGE_PE32_EXE || ImageType == IMAGE_PE64_EXE)&& 
             NULL != RtlSearchString(FullImagePath, L"NOTEPAD.EXE", FALSE)) {
             IsAllow = FALSE;
         }
 
     } else if (ioctl == IOCTL_DEMO_DENY_FFI) {
 
-        if (ImageType == IMAGE_DLL &&
+        if ((ImageType == IMAGE_PE32_DLL || ImageType == IMAGE_PE64_DLL)&&
             NULL != RtlSearchString(FullImagePath, L"unarc.dll", FALSE)) {
             IsAllow = FALSE;
         }
 
-    } else if (ioctl == IOCTL_DEMO_DENY_FILEMON) {
+    } else if (ioctl == IOCTL_DEMO_DENY_PROCMON) {
 
-        if (ImageType == IMAGE_SYS && 
-            NULL != RtlSearchString(FullImagePath, L"FILEM", FALSE)) {
+        if ((ImageType == IMAGE_PE32_SYS || ImageType == IMAGE_PE64_SYS) && 
+            NULL != RtlSearchString(FullImagePath, L"PROCMON", FALSE)) {
             IsAllow = FALSE;
         }
 
@@ -149,7 +155,7 @@ NTSTATUS DispatchIoctl(PDEVICE_OBJECT pDevObj, PIRP pIrp)
     {
     case IOCTL_DEMO_DENY_NOTEPAD:
     case IOCTL_DEMO_DENY_FFI:
-    case IOCTL_DEMO_DENY_FILEMON:
+    case IOCTL_DEMO_DENY_PROCMON:
     case IOCTL_DEMO_DENY_CDROM:
     case IOCTL_DEMO_DENY_USB:
     case IOCTL_DEMO_DENY_SMB:

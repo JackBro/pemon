@@ -74,7 +74,7 @@ main(int argc, char* argv[])
         printf("0. Exit\n");
         printf("1. Deny Notepad.exe\n");
         printf("2. Deny FFI's unarc.dll\n");
-        printf("3. Deny Filemon's Driver(FILEMxxx.SYS)\n");
+        printf("3. Deny Procmon's Driver(PROCMONxx.SYS)\n");
         printf("4. Deny Applications from CDROM\n");
         printf("5. Deny Applications from USB\n");
         printf("6. Deny Applications from SMB Share\n");
@@ -95,7 +95,7 @@ main(int argc, char* argv[])
         } else if (response == 2) {
             ioctl = IOCTL_DEMO_DENY_FFI;
         } else if (response == 3) {
-            ioctl = IOCTL_DEMO_DENY_FILEMON;
+            ioctl = IOCTL_DEMO_DENY_PROCMON;
         } else if (response == 4) {
             ioctl = IOCTL_DEMO_DENY_CDROM;
         } else if (response == 5) {
