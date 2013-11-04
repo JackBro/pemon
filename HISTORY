@@ -1,3 +1,9 @@
+0.4
+增强了CDROM和SMB文件的识别
+解决了IoQueryFileDosDeviceName导致BSOD的问题
+改进了转换路径的方法
+支持WIN7 x64
+
 0.3
 增加了WIN7 X86的支持
 回调接口增加了PE64文件类型
