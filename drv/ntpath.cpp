@@ -97,6 +97,7 @@ VOID RtlRemoveUnicodeBackslash( UNICODE_STRING* us )
 	}	
 }
 
+extern "C"
 VOID RtlRemoveUnicodeStringPrefix(UNICODE_STRING* us, WCHAR* Prefix)
 {
 	INT PrefixLen = wcslen(Prefix);
@@ -106,6 +107,7 @@ VOID RtlRemoveUnicodeStringPrefix(UNICODE_STRING* us, WCHAR* Prefix)
 		RtlCopyMemory(us->Buffer, us->Buffer + PrefixLen, us->Length);
 	}
 }
+
 
 WCHAR* RtlFindLastChar( UNICODE_STRING* us, WCHAR chr )
 {

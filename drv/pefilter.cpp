@@ -220,51 +220,13 @@ QueryDeviceType(PDEVICE_OBJECT DiskDeviceObject,BOOLEAN* IsUSBVolume)
 
 
 enum DISK_TYPE
-QueryDiskType(UNICODE_STRING* usPath, FILE_OBJECT* ImageFileObject)
+QueryDiskType(FILE_OBJECT* ImageFileObject)
 {
     NTSTATUS status;
 
     DEVICE_OBJECT* BaseFSDeviceObject = NULL;
 
-    if (ImageFileObject == NULL) {
-
-        OBJECT_ATTRIBUTES oa = {0};
-         InitializeObjectAttributes (&oa, usPath, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
-
-        IO_STATUS_BLOCK iosb = {0};
-        HANDLE  FileHandle = NULL;
-        status = ZwOpenFile (&FileHandle, 
-                GENERIC_READ | SYNCHRONIZE, 
-                &oa, &iosb, 
-                FILE_SHARE_READ|FILE_SHARE_DELETE,
-                FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE);
-        if (!NT_SUCCESS(status)) {
-            return DT_UNKNOWN;
-        }
-
-        status = ObReferenceObjectByHandle(FileHandle,
-                                        0,
-                                        *IoFileObjectType,
-                                        KernelMode,
-                                        (PVOID *)&ImageFileObject,
-                                        NULL );
-        ZwClose(FileHandle);
-        FileHandle = NULL;
-        
-        if (!NT_SUCCESS(status)) {
-            return DT_UNKNOWN;
-        }
-
-        BaseFSDeviceObject = IoGetBaseFileSystemDeviceObject(ImageFileObject);
-        ObDereferenceObject(ImageFileObject);
-        ImageFileObject = NULL;
-
-    } else {
-
-        BaseFSDeviceObject = IoGetBaseFileSystemDeviceObject(ImageFileObject);
-
-    }
-
+    BaseFSDeviceObject = IoGetBaseFileSystemDeviceObject(ImageFileObject);
     if (BaseFSDeviceObject == NULL) {
         return DT_UNKNOWN;
     }
@@ -308,13 +270,101 @@ QueryDiskType(UNICODE_STRING* usPath, FILE_OBJECT* ImageFileObject)
     }
 }
 
-/*
-NTSTATUS
-QueryFileDosName(FILE_OBJECT* ImageFileObject)
-{
 
+NTSTATUS
+QueryFileDosName(FILE_OBJECT* ImageFileObject, UNICODE_STRING* usDosName)
+{
+    NTSTATUS status;
+
+    DEVICE_OBJECT* BaseFSDeviceObject = NULL;
+    BaseFSDeviceObject = IoGetBaseFileSystemDeviceObject(ImageFileObject);
+
+    if (BaseFSDeviceObject == NULL) {
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    
+    OBJECT_NAME_INFORMATION* ObjInfo = NULL;
+    status = IoQueryFileDosDeviceName(ImageFileObject, &ObjInfo);
+    
+    if (NT_SUCCESS(status)) {
+
+        // 有两种格式
+        //1. \Device\HarddiskVolume2\Windows\System32\notepad.exe
+        //2. C:\\Windows\System32\notepad.exe
+        //如果是第1种格式， 就需要遍历A-Z所有的盘符， 直到和卷设备名称相符
+
+        if (ObjInfo->Name.Buffer[1] == L':') {
+
+        
+            RtlCopyUnicodeString(usDosName, &ObjInfo->Name);
+
+        } else {
+
+            UNICODE_STRING usSymbolName = {0};
+            WCHAR SymbolBuffer[16] = {L"\\??\\X:"};
+            RtlInitUnicodeString(&usSymbolName, SymbolBuffer);
+
+            for(WCHAR c = L'A' ; c < ('Z'+1); ++c ) {
+
+                usSymbolName.Buffer[wcslen(L"\\??\\")] = c;
+                
+                OBJECT_ATTRIBUTES oa;
+                InitializeObjectAttributes(
+                    &oa,
+                    &usSymbolName,
+                    OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+                    NULL,NULL);
+                
+                HANDLE hSymbol;
+                status = ZwOpenSymbolicLinkObject(
+                    &hSymbol,
+                    GENERIC_READ,
+                    &oa);
+                
+                if( !NT_SUCCESS(status)){        
+                    continue;
+                }  
+
+                WCHAR TargetBuffer[MAX_FILE_PATH] = {0};
+                UNICODE_STRING usTarget = {0};
+                RtlInitEmptyUnicodeString(&usTarget, TargetBuffer, sizeof(TargetBuffer));
+
+                ULONG ReturnLength;
+                status = ZwQuerySymbolicLinkObject(hSymbol, &usTarget, &ReturnLength);
+                if( !NT_SUCCESS( status ) ) {
+                    ZwClose(hSymbol);
+                    hSymbol = NULL;
+                    continue;
+                }
+
+                UNICODE_STRING usString = {0};
+                usString.Length = usString.MaximumLength = usTarget.Length;
+                usString.Buffer = ObjInfo->Name.Buffer;
+                if (0 == RtlCompareUnicodeString(&usString, &usTarget, FALSE)) {
+
+                    RtlCopyUnicodeString(usDosName, &usSymbolName);
+                    RtlAppendUnicodeStringToString(usDosName, &ImageFileObject->FileName);
+
+                    RtlRemoveUnicodeStringPrefix(usDosName, L"\\??\\");
+                }
+
+                ZwClose(hSymbol);
+                hSymbol = NULL;
+
+            }
+            
+        }
+
+        ExFreePool(ObjInfo);
+        ObjInfo = NULL;
+    } 
+
+
+
+    return status;
 }
-*/
+
 
 enum DISK_TYPE
 GuessUnknownDiskType(UNICODE_STRING* usPath)
@@ -564,59 +614,94 @@ VOID LoadImageNotifyRoutine
             WIN_VER_DETAIL WinVer = GetWindowsVersion();
             if (WinVer >= WINDOWS_VERSION_VISTA ) {
                 if (ImageInfo->ExtendedInfoPresent) {
-                    IMAGE_INFO_EX* ImageInfoEx = CONTAINING_RECORD(ImageInfo, IMAGE_INFO_EX, ImageInfo);
+                    IMAGE_INFO_EX* ImageInfoEx = 
+                        CONTAINING_RECORD(ImageInfo, IMAGE_INFO_EX, ImageInfo);
                     ImageFileObject = ImageInfoEx->FileObject;
                 }
-            }
-            
-            enum DISK_TYPE DeviceType;
-            DeviceType = QueryDiskType(FullImageName, ImageFileObject);
-            if (DeviceType == DT_UNKNOWN) {
-                DeviceType = GuessUnknownDiskType(FullImageName);
-            }
-
-            WCHAR DosNameBuffer[MAX_FILE_PATH] = {0};
-            UNICODE_STRING usDosName = {0};
-            RtlInitEmptyUnicodeString(&usDosName, DosNameBuffer, sizeof(DosNameBuffer));
-
-            UNICODE_STRING* usImagePath = NULL;
-            status = VolumeNameToDosName(FullImageName, &usDosName);
-            if(status == STATUS_SUCCESS) {
-                usImagePath = &usDosName;
             } else {
-                usImagePath = FullImageName;
+
+                // XP环境下， 就需要自己获取FILE_OBJECT对象了
+                OBJECT_ATTRIBUTES oa = {0};
+                InitializeObjectAttributes (&oa, FullImageName, 
+                    OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+
+                IO_STATUS_BLOCK iosb = {0};
+                HANDLE  FileHandle = NULL;
+                status = ZwOpenFile (&FileHandle, 
+                        GENERIC_READ | SYNCHRONIZE, 
+                        &oa, &iosb, 
+                        FILE_SHARE_READ|FILE_SHARE_DELETE,
+                        FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE);
+                if (NT_SUCCESS(status)) {
+                     status = ObReferenceObjectByHandle(FileHandle,
+                                                0,
+                                                *IoFileObjectType,
+                                                KernelMode,
+                                                (PVOID *)&ImageFileObject,
+                                                NULL );
+                    ZwClose(FileHandle);
+                    FileHandle = NULL;
+                }
+
             }
 
-            //调用回调函数
-            BOOLEAN IsDeny = !devExt->NotifyRoutine((ULONG)ProcessId, 
-                    usImagePath, 
-                    DeviceType, 
-                    FileType, devExt->Context);
+            if (ImageFileObject != NULL) {
 
-            //根据回调函数， 决定是否加载
-            if (IsDeny) {
-
-                PVOID Entry = (PVOID)GetImageEntry(ImageInfo->ImageBase);
-
-                switch(FileType) {
-                case IMAGE_PE32_EXE:
-                case IMAGE_PE64_EXE:
-                    DenyLoadExecute(Entry);
-                    break;
-
-                case IMAGE_PE32_DLL:
-                case IMAGE_PE64_DLL:
-                    DenyLoadDll(Entry);
-                    break;
-
-                case IMAGE_PE32_SYS:
-                case IMAGE_PE64_SYS:
-                    DenyLoadDriver(Entry);
-                    break;
+                enum DISK_TYPE DeviceType;
+                DeviceType = QueryDiskType(ImageFileObject);
+                if (DeviceType == DT_UNKNOWN) {
+                    DeviceType = GuessUnknownDiskType(FullImageName);
                 }
-                
-            } 
-        
+
+                WCHAR DosNameBuffer[MAX_FILE_PATH] = {0};
+                UNICODE_STRING usDosName = {0};
+                RtlInitEmptyUnicodeString(&usDosName, DosNameBuffer, sizeof(DosNameBuffer));
+
+                UNICODE_STRING* usImagePath = NULL;
+                //status = VolumeNameToDosName(FullImageName, &usDosName);
+                status = QueryFileDosName(ImageFileObject, &usDosName);
+                if(status == STATUS_SUCCESS) {
+                    usImagePath = &usDosName;
+                } else {
+                    usImagePath = FullImageName;
+                }
+
+                if (WinVer < WINDOWS_VERSION_VISTA ) {
+                    ObDereferenceObject(ImageFileObject);
+                    ImageFileObject = NULL;
+                }
+
+
+                //调用回调函数
+                BOOLEAN IsDeny = !devExt->NotifyRoutine((ULONG)ProcessId, 
+                        usImagePath, 
+                        DeviceType, 
+                        FileType, devExt->Context);
+
+                //根据回调函数， 决定是否加载
+                if (IsDeny) {
+
+                    PVOID Entry = (PVOID)GetImageEntry(ImageInfo->ImageBase);
+
+                    switch(FileType) {
+                    case IMAGE_PE32_EXE:
+                    case IMAGE_PE64_EXE:
+                        DenyLoadExecute(Entry);
+                        break;
+
+                    case IMAGE_PE32_DLL:
+                    case IMAGE_PE64_DLL:
+                        DenyLoadDll(Entry);
+                        break;
+
+                    case IMAGE_PE32_SYS:
+                    case IMAGE_PE64_SYS:
+                        DenyLoadDriver(Entry);
+                        break;
+                    }
+                    
+                } 
+            }
         }
     }
 }

@@ -128,7 +128,45 @@ OnDemoDeny(ULONG ProcessId,
             IsAllow = FALSE;
         }
         
-    } 
+    } else if (ioctl == IOCTL_DEMO_DENY_ALL) {
+
+        if ((ImageType == IMAGE_PE32_EXE || ImageType == IMAGE_PE64_EXE)&& 
+            NULL != RtlSearchString(FullImagePath, L"NOTEPAD.EXE", FALSE)) {
+            IsAllow = FALSE;
+        }
+
+        if (IsAllow) {
+            if ((ImageType == IMAGE_PE32_DLL || ImageType == IMAGE_PE64_DLL)&&
+                NULL != RtlSearchString(FullImagePath, L"unarc.dll", FALSE)) {
+                IsAllow = FALSE;
+            }
+        }
+
+        if (IsAllow) {
+            if ((ImageType == IMAGE_PE32_SYS || ImageType == IMAGE_PE64_SYS) && 
+                NULL != RtlSearchString(FullImagePath, L"PROCMON", FALSE)) {
+                IsAllow = FALSE;
+            }
+        }
+
+        if (IsAllow) {
+            if (DeviceType == DT_CDROM) {
+                IsAllow = FALSE;
+            }
+        }
+
+        if (IsAllow) {
+            if (DeviceType == DT_USB) {
+                IsAllow = FALSE;
+            }
+        }
+
+        if (IsAllow) {
+            if (DeviceType == DT_REMOTE) {
+                IsAllow = FALSE;
+            }
+        }
+    }
 
     DbgPrint("[pefilter]%S, %wZ, %wZ, %wZ\n\n",
         IsAllow ? L"ALLOW":L"DENY", 
@@ -159,6 +197,7 @@ NTSTATUS DispatchIoctl(PDEVICE_OBJECT pDevObj, PIRP pIrp)
     case IOCTL_DEMO_DENY_CDROM:
     case IOCTL_DEMO_DENY_USB:
     case IOCTL_DEMO_DENY_SMB:
+    case IOCTL_DEMO_DENY_ALL:
 
         //nothing
         if (SetupImageNotify(OnDemoDeny, (PVOID*)uIoControlCode)) {

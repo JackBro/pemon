@@ -78,6 +78,7 @@ main(int argc, char* argv[])
         printf("4. Deny Applications from CDROM\n");
         printf("5. Deny Applications from USB\n");
         printf("6. Deny Applications from SMB Share\n");
+        printf("7. Deny 1 - 6\n");
         printf("-----------------------------------------\n");
         printf("Please Press Number: ");
 
@@ -102,6 +103,8 @@ main(int argc, char* argv[])
             ioctl = IOCTL_DEMO_DENY_USB;
         } else if (response == 6) {
             ioctl = IOCTL_DEMO_DENY_SMB;
+        } else if (response == 7) {
+            ioctl = IOCTL_DEMO_DENY_ALL;
         } else {
             continue;
         }
