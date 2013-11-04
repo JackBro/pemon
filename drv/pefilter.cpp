@@ -332,25 +332,23 @@ QueryFileDosName(FILE_OBJECT* ImageFileObject, UNICODE_STRING* usDosName)
 
                 ULONG ReturnLength;
                 status = ZwQuerySymbolicLinkObject(hSymbol, &usTarget, &ReturnLength);
-                if( !NT_SUCCESS( status ) ) {
-                    ZwClose(hSymbol);
-                    hSymbol = NULL;
-                    continue;
-                }
-
-                UNICODE_STRING usString = {0};
-                usString.Length = usString.MaximumLength = usTarget.Length;
-                usString.Buffer = ObjInfo->Name.Buffer;
-                if (0 == RtlCompareUnicodeString(&usString, &usTarget, FALSE)) {
-
-                    RtlCopyUnicodeString(usDosName, &usSymbolName);
-                    RtlAppendUnicodeStringToString(usDosName, &ImageFileObject->FileName);
-
-                    RtlRemoveUnicodeStringPrefix(usDosName, L"\\??\\");
-                }
 
                 ZwClose(hSymbol);
                 hSymbol = NULL;
+                if( NT_SUCCESS( status ) ) {
+
+                    UNICODE_STRING usString = {0};
+                    usString.Length = usString.MaximumLength = usTarget.Length;
+                    usString.Buffer = ObjInfo->Name.Buffer;
+                    if (0 == RtlCompareUnicodeString(&usString, &usTarget, FALSE)) {
+
+                        RtlCopyUnicodeString(usDosName, &usSymbolName);
+                        RtlAppendUnicodeStringToString(usDosName, &ImageFileObject->FileName);
+
+                        RtlRemoveUnicodeStringPrefix(usDosName, L"\\??\\");
+                        break;
+                    }                    
+                }
 
             }
             
