@@ -32,7 +32,7 @@ BOOLEAN VxkCopyMemory( PVOID pDestination, PVOID pSourceAddress, SIZE_T SizeOfCo
 }
 
   
-NTSTATUS SafeCopyMemory(ULONG ulAddrDst, ULONG ulAddrSrc, ULONG ulLenToCopy)  
+NTSTATUS SafeCopyMemory(PVOID ulAddrDst, PVOID ulAddrSrc, ULONG ulLenToCopy)  
 {  
     NTSTATUS    status = STATUS_UNSUCCESSFUL;  
     ULONG       ulLen = 0;  
@@ -55,8 +55,8 @@ NTSTATUS SafeCopyMemory(ULONG ulAddrDst, ULONG ulAddrSrc, ULONG ulLenToCopy)
         }  
     } while (0 != ulLen--);  
   
-    pMdlDst = IoAllocateMdl((PVOID)ulAddrDst, ulLenToCopy, FALSE, FALSE, NULL);  
-    pMdlSrc = IoAllocateMdl((PVOID)ulAddrSrc, ulLenToCopy, FALSE, FALSE, NULL);  
+    pMdlDst = IoAllocateMdl(ulAddrDst, ulLenToCopy, FALSE, FALSE, NULL);  
+    pMdlSrc = IoAllocateMdl(ulAddrSrc, ulLenToCopy, FALSE, FALSE, NULL);  
     if ((NULL != pMdlSrc) && (NULL != pMdlDst))  
     {  
     __try  
@@ -123,8 +123,7 @@ void DenyLoadExecute(PVOID EntryPoint)
 #else
     UCHAR fuck[]="\x33\xC0\xC3"; 
 #endif
-    SafeCopyMemory((ULONG)EntryPoint, (ULONG)fuck, sizeof(fuck));
-
+    SafeCopyMemory(EntryPoint, fuck, sizeof(fuck));
 }
 
 void DenyLoadDll(PVOID EntryPoint)
@@ -136,7 +135,7 @@ void DenyLoadDll(PVOID EntryPoint)
 #else
     UCHAR fuck[]="\x33\xC0\xC2\x0C\x00";
 #endif
-    SafeCopyMemory((ULONG)EntryPoint, (ULONG)fuck, sizeof(fuck));     
+    SafeCopyMemory(EntryPoint, fuck, sizeof(fuck));     
 }
 
 /*
@@ -309,6 +308,14 @@ QueryDiskType(UNICODE_STRING* usPath, FILE_OBJECT* ImageFileObject)
     }
 }
 
+/*
+NTSTATUS
+QueryFileDosName(FILE_OBJECT* ImageFileObject)
+{
+
+}
+*/
+
 enum DISK_TYPE
 GuessUnknownDiskType(UNICODE_STRING* usPath)
 {
@@ -387,11 +394,7 @@ GetImageType(PVOID ImageBase, enum IMAGE_TYPE* ImageType)
     pDOSHeader = (PIMAGE_DOS_HEADER)ImageBase;
 
 
-#ifdef _AMD64_
-    pNTHeader = (PIMAGE_NT_HEADERS)((ULONG64)ImageBase + pDOSHeader->e_lfanew);
-#else
-    pNTHeader = (PIMAGE_NT_HEADERS)((ULONG)ImageBase + pDOSHeader->e_lfanew);
-#endif
+    pNTHeader = (PIMAGE_NT_HEADERS)((PCHAR)ImageBase + pDOSHeader->e_lfanew);
 
     switch(pNTHeader->FileHeader.Machine) {
     case IMAGE_FILE_MACHINE_I386: {
@@ -440,24 +443,18 @@ PVOID GetImageEntry(PVOID ImageBase)
     PVOID pEntryPoint;
     pDOSHeader = (PIMAGE_DOS_HEADER)ImageBase;
 
-#ifdef _AMD64_
-    pNTHeader = (PIMAGE_NT_HEADERS)((ULONG64)ImageBase + pDOSHeader->e_lfanew);
-#else
-    pNTHeader = (PIMAGE_NT_HEADERS)((ULONG)ImageBase + pDOSHeader->e_lfanew);
-#endif   
+    pNTHeader = (PIMAGE_NT_HEADERS)((PCHAR)ImageBase + pDOSHeader->e_lfanew);
 
     switch(pNTHeader->FileHeader.Machine) {
     case IMAGE_FILE_MACHINE_I386: {
-#ifdef _AMD64_
-        pEntryPoint = (PVOID)((ULONG64)ImageBase + pNTHeader->OptionalHeader.AddressOfEntryPoint);
-#else 
-        pEntryPoint = (PVOID)((ULONG)ImageBase + pNTHeader->OptionalHeader.AddressOfEntryPoint);
-#endif 
+
+        pEntryPoint = (PVOID)((PCHAR)ImageBase + pNTHeader->OptionalHeader.AddressOfEntryPoint);
+
         break; }
 
 #ifdef _AMD64_
     case IMAGE_FILE_MACHINE_AMD64: {
-        pEntryPoint = (PVOID)((ULONG64)ImageBase + pNTHeader->OptionalHeader.AddressOfEntryPoint);
+        pEntryPoint = (PVOID)((PCHAR)ImageBase + pNTHeader->OptionalHeader.AddressOfEntryPoint);
         break; }
 #endif
 
@@ -489,20 +486,16 @@ WIN_VER_DETAIL GetWindowsVersion()
     UNICODE_STRING usFuncName = {0};
     RtlInitUnicodeString(&usFuncName, L"RtlGetVersion"); 
     pfnRtlGetVersion = (PFN_RtlGetVersion)MmGetSystemRoutineAddress(&usFuncName); 
-    if ( NULL == pfnRtlGetVersion)
-     {
+    if ( NULL == pfnRtlGetVersion) {
         PsGetVersion(&OSVersionInfoEx.dwMajorVersion,&OSVersionInfoEx.dwMinorVersion,
              &OSVersionInfoEx.dwBuildNumber,NULL);
-     }
-    else
-    {
+    } else {
         pfnRtlGetVersion((PRTL_OSVERSIONINFOW)&OSVersionInfoEx);
-     }
+    }
 
-    if (5 == OSVersionInfoEx.dwMajorVersion)
-     {
-        switch (OSVersionInfoEx.dwMinorVersion)
-         {
+    if (5 == OSVersionInfoEx.dwMajorVersion) {
+
+        switch (OSVersionInfoEx.dwMinorVersion){
         case 0:
             return WINDOWS_VERSION_2K;
         case 1:
@@ -512,12 +505,12 @@ WIN_VER_DETAIL GetWindowsVersion()
                 return WINDOWS_VERSION_2K3;
             else
                  return WINDOWS_VERSION_2K3_SP1_SP2;
-         }
-     }
-    if (6 == OSVersionInfoEx.dwMajorVersion)
-     {
-        switch (OSVersionInfoEx.dwMinorVersion)
-         {
+        }
+    }
+
+    if (6 == OSVersionInfoEx.dwMajorVersion) {
+
+        switch (OSVersionInfoEx.dwMinorVersion) {
         case 0:
             return WINDOWS_VERSION_VISTA;
         case 1:
@@ -525,7 +518,7 @@ WIN_VER_DETAIL GetWindowsVersion()
         default:
             return WINDOWS_VERSION_7;
         }
-     }
+    }
     return WINDOWS_VERSION_UNKNOWN;
 }
 
@@ -584,7 +577,7 @@ VOID LoadImageNotifyRoutine
 
             WCHAR DosNameBuffer[MAX_FILE_PATH] = {0};
             UNICODE_STRING usDosName = {0};
-            RtlInitEmptyUnicodeString(&usDosName, DosNameBuffer, MAX_FILE_PATH);
+            RtlInitEmptyUnicodeString(&usDosName, DosNameBuffer, sizeof(DosNameBuffer));
 
             UNICODE_STRING* usImagePath = NULL;
             status = VolumeNameToDosName(FullImageName, &usDosName);
