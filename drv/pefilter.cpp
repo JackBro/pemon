@@ -276,89 +276,96 @@ QueryFileDosName(FILE_OBJECT* ImageFileObject, UNICODE_STRING* usDosName)
 {
     NTSTATUS status;
 
-    DEVICE_OBJECT* BaseFSDeviceObject = NULL;
-    BaseFSDeviceObject = IoGetBaseFileSystemDeviceObject(ImageFileObject);
 
-    if (BaseFSDeviceObject == NULL) {
+    DEVICE_OBJECT* VolumeDeviceObject = NULL;
+    if (ImageFileObject->Vpb!= NULL && 
+        ImageFileObject->Vpb->RealDevice != NULL) {
+        VolumeDeviceObject = ImageFileObject->Vpb->RealDevice;
+    } else {
+        VolumeDeviceObject = ImageFileObject->DeviceObject;
+    }
+
+
+    ULONG ReturnLength = 0;
+  
+
+    status = ObQueryNameString(VolumeDeviceObject, NULL, 0, &ReturnLength);
+    if (ReturnLength == 0) {
         return STATUS_UNSUCCESSFUL;
     }
 
-    
+    POBJECT_NAME_INFORMATION NameInfo = 
+        (POBJECT_NAME_INFORMATION)ExAllocatePoolWithTag( NonPagedPool, ReturnLength, 'PEMN');
+
+
+    status = ObQueryNameString(VolumeDeviceObject, 
+        (POBJECT_NAME_INFORMATION)NameInfo, 
+        ReturnLength, 
+        &ReturnLength);
+
+
+    /*
     OBJECT_NAME_INFORMATION* ObjInfo = NULL;
     status = IoQueryFileDosDeviceName(ImageFileObject, &ObjInfo);
-    
+    */
+
     if (NT_SUCCESS(status)) {
 
-        // 有两种格式
-        //1. \Device\HarddiskVolume2\Windows\System32\notepad.exe
-        //2. C:\\Windows\System32\notepad.exe
-        //如果是第1种格式， 就需要遍历A-Z所有的盘符， 直到和卷设备名称相符
+        //\Device\HarddiskVolume2\Windows\System32\notepad.exe
+        UNICODE_STRING* usDriverName = &NameInfo->Name;
 
-        if (ObjInfo->Name.Buffer[1] == L':') {
+        UNICODE_STRING usSymbolName = {0};
+        WCHAR SymbolBuffer[16] = {L"\\??\\X:"};
+        RtlInitUnicodeString(&usSymbolName, SymbolBuffer);
 
-        
-            RtlCopyUnicodeString(usDosName, &ObjInfo->Name);
+        for(WCHAR c = L'A' ; c < ('Z'+1); ++c ) {
 
-        } else {
-
-            UNICODE_STRING usSymbolName = {0};
-            WCHAR SymbolBuffer[16] = {L"\\??\\X:"};
-            RtlInitUnicodeString(&usSymbolName, SymbolBuffer);
-
-            for(WCHAR c = L'A' ; c < ('Z'+1); ++c ) {
-
-                usSymbolName.Buffer[wcslen(L"\\??\\")] = c;
-                
-                OBJECT_ATTRIBUTES oa;
-                InitializeObjectAttributes(
-                    &oa,
-                    &usSymbolName,
-                    OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
-                    NULL,NULL);
-                
-                HANDLE hSymbol;
-                status = ZwOpenSymbolicLinkObject(
-                    &hSymbol,
-                    GENERIC_READ,
-                    &oa);
-                
-                if( !NT_SUCCESS(status)){        
-                    continue;
-                }  
-
-                WCHAR TargetBuffer[MAX_FILE_PATH] = {0};
-                UNICODE_STRING usTarget = {0};
-                RtlInitEmptyUnicodeString(&usTarget, TargetBuffer, sizeof(TargetBuffer));
-
-                ULONG ReturnLength;
-                status = ZwQuerySymbolicLinkObject(hSymbol, &usTarget, &ReturnLength);
-
-                ZwClose(hSymbol);
-                hSymbol = NULL;
-                if( NT_SUCCESS( status ) ) {
-
-                    UNICODE_STRING usString = {0};
-                    usString.Length = usString.MaximumLength = usTarget.Length;
-                    usString.Buffer = ObjInfo->Name.Buffer;
-                    if (0 == RtlCompareUnicodeString(&usString, &usTarget, FALSE)) {
-
-                        RtlCopyUnicodeString(usDosName, &usSymbolName);
-                        RtlAppendUnicodeStringToString(usDosName, &ImageFileObject->FileName);
-
-                        RtlRemoveUnicodeStringPrefix(usDosName, L"\\??\\");
-                        break;
-                    }                    
-                }
-
-            }
+            usSymbolName.Buffer[wcslen(L"\\??\\")] = c;
             
-        }
+            OBJECT_ATTRIBUTES oa;
+            InitializeObjectAttributes(
+                &oa,
+                &usSymbolName,
+                OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+                NULL,NULL);
+            
+            HANDLE hSymbol;
+            status = ZwOpenSymbolicLinkObject(
+                &hSymbol,
+                GENERIC_READ,
+                &oa);
+            
+            if( !NT_SUCCESS(status)){        
+                continue;
+            }  
 
-        ExFreePool(ObjInfo);
-        ObjInfo = NULL;
+            WCHAR TargetBuffer[64] = {0};
+            UNICODE_STRING usTarget = {0};
+            RtlInitEmptyUnicodeString(&usTarget, TargetBuffer, sizeof(TargetBuffer));
+
+            ULONG ReturnLength;
+            status = ZwQuerySymbolicLinkObject(hSymbol, &usTarget, &ReturnLength);
+
+            ZwClose(hSymbol);
+            hSymbol = NULL;
+
+            if( NT_SUCCESS( status ) ) {
+
+                if (0 == RtlCompareUnicodeString(usDriverName, &usTarget, FALSE)) {
+
+                    RtlCopyUnicodeString(usDosName, &usSymbolName);
+                    RtlAppendUnicodeStringToString(usDosName, &ImageFileObject->FileName);
+
+                    RtlRemoveUnicodeStringPrefix(usDosName, L"\\??\\");
+                    break;
+                }                    
+            }
+
+        }
     } 
 
-
+    ExFreePool(NameInfo);
+    NameInfo = NULL;
 
     return status;
 }
