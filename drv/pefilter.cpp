@@ -236,7 +236,8 @@ QueryDiskType(FILE_OBJECT* ImageFileObject)
     if (!NT_SUCCESS(status)) {
 
         // 如果是SMB共享，是没有Disk设备的
-        if (BaseFSDeviceObject->Characteristics & FILE_REMOTE_DEVICE) {
+        if (BaseFSDeviceObject->Characteristics & FILE_REMOTE_DEVICE && 
+            BaseFSDeviceObject->DeviceType == FILE_DEVICE_NETWORK_FILE_SYSTEM ) {
             return DT_REMOTE;
         } else {
             return DT_UNKNOWN;
@@ -246,11 +247,8 @@ QueryDiskType(FILE_OBJECT* ImageFileObject)
 
         if (DiskDeviceObject->Characteristics & FILE_REMOVABLE_MEDIA) {
 
-            UNICODE_STRING usCdrom = {0};
-            RtlInitUnicodeString(&usCdrom, L"\\Driver\\cdrom");
-
-            if (DiskDeviceObject->DriverObject != NULL &&
-                RtlCompareUnicodeString(&usCdrom, &DiskDeviceObject->DriverObject->DriverName, FALSE) == 0) {
+            //\\Driver\\cdrom
+            if (DiskDeviceObject->DeviceType = FILE_DEVICE_CD_ROM ) {
 
                 return DT_CDROM;
 
