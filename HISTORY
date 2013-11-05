@@ -1,3 +1,8 @@
+0.5
+修正了RtlRemoveUnicodeStringPrefix的问题
+不在使用DEVICE_OBJECT->Extension来存储回调函数
+修正了XP下未解析\Windows\system32\XXXX.dll这样的路径问题
+
 0.4
 增强了CDROM和SMB文件的识别
 解决了IoQueryFileDosDeviceName导致BSOD的问题
