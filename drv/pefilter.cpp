@@ -249,8 +249,11 @@ QueryDiskType(FILE_OBJECT* ImageFileObject)
 
         if (DiskDeviceObject->Characteristics & FILE_REMOVABLE_MEDIA) {
 
-            //\\Driver\\cdrom
-            if (DiskDeviceObject->DeviceType = FILE_DEVICE_CD_ROM ) {
+            UNICODE_STRING usCdrom = {0};
+            RtlInitUnicodeString(&usCdrom, L"\\Driver\\cdrom");
+
+            if (DiskDeviceObject->DriverObject != NULL &&
+                RtlCompareUnicodeString(&usCdrom, &DiskDeviceObject->DriverObject->DriverName, TRUE) == 0) {
 
                 return DT_CDROM;
 
