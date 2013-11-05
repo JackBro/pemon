@@ -89,7 +89,8 @@ RtlCompareUnicodeStringSafe(UNICODE_STRING* us, WCHAR* str)
 	}
 }
 
-VOID RtlRemoveUnicodeBackslash( UNICODE_STRING* us )
+VOID 
+RtlRemoveUnicodeBackslash( UNICODE_STRING* us )
 {
 	if( us->Buffer[ ( us->Length >> 1 )- 1 ] == L'\\' ){
 		us->Buffer[ ( us->Length >> 1 )- 1 ] = 0;
@@ -98,16 +99,20 @@ VOID RtlRemoveUnicodeBackslash( UNICODE_STRING* us )
 }
 
 extern "C"
-VOID RtlRemoveUnicodeStringPrefix(UNICODE_STRING* us, WCHAR* Prefix)
+VOID 
+RtlRemoveUnicodeStringPrefix(UNICODE_STRING* us, const WCHAR* Prefix)
 {
 	INT PrefixLen = wcslen(Prefix);
 
-	if (0 == wcsncmp(us->Buffer, Prefix, PrefixLen)) {
-		us->Length -= PrefixLen;
-		RtlCopyMemory(us->Buffer, us->Buffer + PrefixLen, us->Length);
+	if (us->Length >= PrefixLen*sizeof( WCHAR ) &&
+		0 == wcsncmp(us->Buffer, Prefix, PrefixLen)) {
+		us->Length -= PrefixLen*sizeof( WCHAR );
+		if (us->Length)
+		{
+			RtlMoveMemory(us->Buffer, us->Buffer + PrefixLen, us->Length);
+		}
 	}
 }
-
 
 WCHAR* RtlFindLastChar( UNICODE_STRING* us, WCHAR chr )
 {
@@ -218,7 +223,8 @@ ret_door:
 }
 
 
-NTSTATUS	GetLongPath( UNICODE_STRING* usDir, UNICODE_STRING* usShortFileName, 
+NTSTATUS	
+GetLongPath( UNICODE_STRING* usDir, UNICODE_STRING* usShortFileName, 
 			     UNICODE_STRING* usLongFileName )
 {
 	FILE_BOTH_DIR_INFORMATION* info = NULL;

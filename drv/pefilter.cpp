@@ -6,9 +6,11 @@
 #include "pefilter.h"
 #include "ntpath.h"
 
-extern DEVICE_OBJECT* g_devobj;
+IMAGE_ROUTINE   g_NotifyRoutine;
+PVOID           g_NotifyContext;
 
-BOOLEAN VxkCopyMemory( PVOID pDestination, PVOID pSourceAddress, SIZE_T SizeOfCopy )
+BOOLEAN 
+VxkCopyMemory( PVOID pDestination, PVOID pSourceAddress, SIZE_T SizeOfCopy )
 {
     PMDL pMdl = NULL;
     PVOID pSafeAddress = NULL;
@@ -273,7 +275,6 @@ NTSTATUS
 QueryFileDosName(FILE_OBJECT* ImageFileObject, UNICODE_STRING* usDosName)
 {
     NTSTATUS status;
-
 
     DEVICE_OBJECT* VolumeDeviceObject = NULL;
     if (ImageFileObject->Vpb!= NULL && 
@@ -585,16 +586,7 @@ VOID LoadImageNotifyRoutine
 {
     DbgPrint("[pefilter]LoadImageNotifyRoutine %wZ\n", FullImageName);
 
-    if (ProcessId == 0) {
-        DbgPrint("[pefilter]Found Driver\n");        
-    }
-
-    if (g_devobj == NULL || g_devobj->DeviceExtension == NULL) {
-        return;
-    }
-
-    DEVICE_EXTENSION* devExt = (DEVICE_EXTENSION*)g_devobj->DeviceExtension;
-    if (devExt->NotifyRoutine == NULL) {
+    if (g_NotifyRoutine == NULL) {
         return;
     }
 
@@ -612,6 +604,8 @@ VOID LoadImageNotifyRoutine
             
             NTSTATUS    status = 0;
 
+            BOOLEAN NeedDereference = FALSE;
+
             //判断设备类型
             FILE_OBJECT* ImageFileObject = NULL;
             WIN_VER_DETAIL WinVer = GetWindowsVersion();
@@ -626,7 +620,7 @@ VOID LoadImageNotifyRoutine
                 // XP环境下， 就需要自己获取FILE_OBJECT对象了
                 OBJECT_ATTRIBUTES oa = {0};
                 InitializeObjectAttributes (&oa, FullImageName, 
-                    OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+                    /*OBJ_CASE_INSENSITIVE |*/ OBJ_KERNEL_HANDLE, NULL, NULL);
 
                 IO_STATUS_BLOCK iosb = {0};
                 HANDLE  FileHandle = NULL;
@@ -642,10 +636,28 @@ VOID LoadImageNotifyRoutine
                                                 KernelMode,
                                                 (PVOID *)&ImageFileObject,
                                                 NULL );
+                    NeedDereference = TRUE;
                     ZwClose(FileHandle);
                     FileHandle = NULL;
-                }
 
+                } else {
+
+                    // xp下， 如果路径是\WINDOWS\SYSTEM32\kernel32.dll这样的格式
+                    // 就只能通过这种方式才解决了
+                    
+                    __try  {
+
+                        ImageFileObject = CONTAINING_RECORD (FullImageName, FILE_OBJECT, FileName);
+            
+                        if (ImageFileObject->Type != 5) {
+                            ImageFileObject = NULL;
+                        }
+
+                    } __except(EXCEPTION_EXECUTE_HANDLER) {
+
+                        ImageFileObject = NULL;
+                    }  
+                }
             }
 
             if (ImageFileObject != NULL) {
@@ -669,17 +681,17 @@ VOID LoadImageNotifyRoutine
                     usImagePath = FullImageName;
                 }
 
-                if (WinVer < WINDOWS_VERSION_VISTA ) {
+                if (NeedDereference ) {
                     ObDereferenceObject(ImageFileObject);
                     ImageFileObject = NULL;
                 }
 
 
                 //调用回调函数
-                BOOLEAN IsDeny = !devExt->NotifyRoutine((ULONG)ProcessId, 
+                BOOLEAN IsDeny = !g_NotifyRoutine((ULONG)ProcessId, 
                         usImagePath, 
                         DeviceType, 
-                        FileType, devExt->Context);
+                        FileType, g_NotifyContext);
 
                 //根据回调函数， 决定是否加载
                 if (IsDeny) {
@@ -713,14 +725,8 @@ VOID LoadImageNotifyRoutine
 BOOLEAN
 SetupImageNotify(IMAGE_ROUTINE OnNotify, VOID* Context)
 {
-    if (g_devobj == NULL) {
-        return FALSE;
-    }
-
-    DEVICE_EXTENSION* devExt = (DEVICE_EXTENSION*)g_devobj->DeviceExtension;
-
-    devExt->NotifyRoutine = OnNotify;
-    devExt->Context = Context;
+    g_NotifyRoutine = OnNotify;
+    g_NotifyContext = Context;
 
     if (OnNotify == NULL) {
         PsRemoveLoadImageNotifyRoutine((PLOAD_IMAGE_NOTIFY_ROUTINE)LoadImageNotifyRoutine);

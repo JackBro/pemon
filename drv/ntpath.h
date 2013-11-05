@@ -19,7 +19,7 @@ WCHAR*
 RtlSearchString( UNICODE_STRING* us, WCHAR* str, BOOLEAN bCaseSensitive);
 
 VOID 
-RtlRemoveUnicodeStringPrefix(UNICODE_STRING* us, WCHAR* Prefix);
+RtlRemoveUnicodeStringPrefix(UNICODE_STRING* us, const WCHAR* Prefix);
 
 NTSTATUS  
 VolumeNameToDosName(UNICODE_STRING* usVolumeName, UNICODE_STRING* usDosName);

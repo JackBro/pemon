@@ -10,7 +10,6 @@
 #define LINK_NAME           L"\\DosDevices\\pefilter"
 #define LINK_GLOBAL_NAME    L"\\DosDevices\\Global\\pefilter"
 
-PDEVICE_OBJECT g_devobj = NULL;
 
 VOID UnicodeToChar(PUNICODE_STRING dst, char *src)
 {
@@ -247,8 +246,6 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT pDriverObj, PUNICODE_STRING pRegistryString)
         IoDeleteDevice(pDevObj); 
         return status;
     }
-    
-    g_devobj = pDevObj;
     
     DbgPrint("[pefilter]Driver loaded!");
 
