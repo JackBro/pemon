@@ -741,10 +741,6 @@ VOID LoadImageNotifyRoutine
 				return;
 			}
 
-            if (RtlSearchString(FullImageName, L"1.exe", FALSE) != NULL) {
-                DbgPrint("Test");
-            }
-
             NTSTATUS    status = 0;
 
             BOOLEAN NeedDereference = FALSE;

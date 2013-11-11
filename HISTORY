@@ -1,3 +1,8 @@
+0.6
+过滤了查看EXE文件属性操作
+过滤了查看驱动版本的操作
+修正了USB和CDROM设备识别不正确的问题
+
 0.5
 修正了RtlRemoveUnicodeStringPrefix的问题
 不在使用DEVICE_OBJECT->Extension来存储回调函数
