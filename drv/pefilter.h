@@ -34,7 +34,7 @@ enum IMAGE_TYPE
 
 typedef 
 BOOLEAN
-(*IMAGE_ROUTINE)(ULONG, UNICODE_STRING*, enum DISK_TYPE, enum IMAGE_TYPE, VOID*);
+(*IMAGE_ROUTINE)(ULONG, UNICODE_STRING*, enum DISK_TYPE, enum IMAGE_TYPE, PVOID ImageBase, VOID*);
 
 typedef struct _DEVICE_EXTENSION
 {
@@ -42,8 +42,10 @@ typedef struct _DEVICE_EXTENSION
     PVOID Context;
 }DEVICE_EXTENSION;
 
-BOOLEAN
-SetupImageNotify(IMAGE_ROUTINE OnNotify, VOID* Context);
+
+BOOLEAN SetupImageNotify(IMAGE_ROUTINE OnNotify, VOID* Context);
+void DenyLoad(IMAGE_TYPE FileType, PVOID ImageBase);
+
 
 #ifdef __cplusplus
 };

@@ -249,11 +249,8 @@ QueryDiskType(FILE_OBJECT* ImageFileObject)
 
         if (DiskDeviceObject->Characteristics & FILE_REMOVABLE_MEDIA) {
 
-            UNICODE_STRING usCdrom = {0};
-            RtlInitUnicodeString(&usCdrom, L"\\Driver\\cdrom");
-
-            if (DiskDeviceObject->DriverObject != NULL &&
-                RtlCompareUnicodeString(&usCdrom, &DiskDeviceObject->DriverObject->DriverName, TRUE) == 0) {
+            //\\Driver\\cdrom
+            if (DiskDeviceObject->DeviceType = FILE_DEVICE_CD_ROM ) {
 
                 return DT_CDROM;
 
@@ -579,6 +576,27 @@ WIN_VER_DETAIL GetWindowsVersion()
     return WINDOWS_VERSION_UNKNOWN;
 }
 
+void DenyLoad(IMAGE_TYPE FileType, PVOID ImageBase)
+{
+	PVOID Entry = (PVOID)GetImageEntry(ImageBase);
+
+	switch(FileType) {
+	case IMAGE_PE32_EXE:
+	case IMAGE_PE64_EXE:
+		DenyLoadExecute(Entry);
+		break;
+
+	case IMAGE_PE32_DLL:
+	case IMAGE_PE64_DLL:
+		DenyLoadDll(Entry);
+		break;
+
+	case IMAGE_PE32_SYS:
+	case IMAGE_PE64_SYS:
+		DenyLoadDriver(Entry);
+		break;
+	}
+}
 
 VOID LoadImageNotifyRoutine
 (
@@ -587,7 +605,7 @@ VOID LoadImageNotifyRoutine
     __in PIMAGE_INFO  ImageInfo
 )
 {
-    DbgPrint("[pefilter]LoadImageNotifyRoutine %wZ\n", FullImageName);
+   // DbgPrint("[pefilter]LoadImageNotifyRoutine %wZ\n", FullImageName);
 
     if (g_NotifyRoutine == NULL) {
         return;
@@ -597,6 +615,7 @@ VOID LoadImageNotifyRoutine
     char szFullImageName[260]={0};
     if(FullImageName!=NULL && MmIsAddressValid(FullImageName))
     {
+		//DbgPrint("call GetImageType ImageBase=%p \n", ImageInfo->ImageBase);
 
         //判断文件类型
 
@@ -604,7 +623,11 @@ VOID LoadImageNotifyRoutine
   
         if (GetImageType(ImageInfo->ImageBase, &FileType)) {
 
-            
+			if ((FileType == IMAGE_PE32_SYS || FileType == IMAGE_PE64_SYS) && !ImageInfo->SystemModeImage)
+			{
+				return;
+			}
+
             NTSTATUS    status = 0;
 
             BOOLEAN NeedDereference = FALSE;
@@ -690,40 +713,39 @@ VOID LoadImageNotifyRoutine
                 }
 
 
+
+				if ((FileType == IMAGE_PE32_EXE || FileType == IMAGE_PE64_EXE))
+				{
+// 					UNICODE_STRING* path_ = GetImagePathByPID(ProcessId);
+// 					if (path_)
+// 					{
+// 						if (0!=wcsicmp(usImagePath->Buffer, path_->Buffer))
+// 						{
+// 							//是加载资源方式
+// 							return;
+// 						}
+// 						free(path_);
+// 					}
+				}
+
+				//DbgPrint("call g_NotifyRoutine ImageBase=%p \n", ImageInfo->ImageBase);
+
                 //调用回调函数
                 BOOLEAN IsDeny = !g_NotifyRoutine((ULONG)ProcessId, 
                         usImagePath, 
                         DeviceType, 
-                        FileType, g_NotifyContext);
+                        FileType, ImageInfo->ImageBase, g_NotifyContext);
 
                 //根据回调函数， 决定是否加载
-                if (IsDeny) {
-
-                    PVOID Entry = (PVOID)GetImageEntry(ImageInfo->ImageBase);
-
-                    switch(FileType) {
-                    case IMAGE_PE32_EXE:
-                    case IMAGE_PE64_EXE:
-                        DenyLoadExecute(Entry);
-                        break;
-
-                    case IMAGE_PE32_DLL:
-                    case IMAGE_PE64_DLL:
-                        DenyLoadDll(Entry);
-                        break;
-
-                    case IMAGE_PE32_SYS:
-                    case IMAGE_PE64_SYS:
-                        DenyLoadDriver(Entry);
-                        break;
-                    }
-                    
-                } 
+                if (IsDeny)
+				{
+					//DbgPrint("call DenyLoad ImageBase=%p \n", ImageInfo->ImageBase);
+					DenyLoad(FileType, ImageInfo->ImageBase);
+                }
             }
         }
     }
 }
-
 
 BOOLEAN
 SetupImageNotify(IMAGE_ROUTINE OnNotify, VOID* Context)
@@ -732,9 +754,9 @@ SetupImageNotify(IMAGE_ROUTINE OnNotify, VOID* Context)
     g_NotifyContext = Context;
 
     if (OnNotify == NULL) {
-        PsRemoveLoadImageNotifyRoutine((PLOAD_IMAGE_NOTIFY_ROUTINE)LoadImageNotifyRoutine);
+        PsRemoveLoadImageNotifyRoutine(LoadImageNotifyRoutine);
     } else {
-        PsSetLoadImageNotifyRoutine((PLOAD_IMAGE_NOTIFY_ROUTINE)LoadImageNotifyRoutine);
+        PsSetLoadImageNotifyRoutine(LoadImageNotifyRoutine);
     }
 
     return TRUE;
