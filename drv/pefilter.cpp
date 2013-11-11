@@ -598,6 +598,117 @@ void DenyLoad(IMAGE_TYPE FileType, PVOID ImageBase)
 	}
 }
 
+
+typedef NTSTATUS (*QUERY_INFO_PROCESS) (
+    __in HANDLE ProcessHandle,
+    __in PROCESSINFOCLASS ProcessInformationClass,
+    __out_bcount(ProcessInformationLength) PVOID ProcessInformation,
+    __in ULONG ProcessInformationLength,
+    __out_opt PULONG ReturnLength
+    );
+
+QUERY_INFO_PROCESS ZwQueryInformationProcess;
+
+NTSTATUS GetProcessImageName(HANDLE ProcessId, PUNICODE_STRING ProcessImageName)
+{
+    NTSTATUS status;
+    ULONG returnedLength;
+    ULONG bufferLength;
+    PVOID buffer;
+    PUNICODE_STRING imageName;
+    
+    PAGED_CODE(); // this eliminates the possibility of the IDLE Thread/Process
+    if (NULL == ZwQueryInformationProcess) {
+        UNICODE_STRING routineName;
+        RtlInitUnicodeString(&routineName, L"ZwQueryInformationProcess");
+        ZwQueryInformationProcess = 
+               (QUERY_INFO_PROCESS) MmGetSystemRoutineAddress(&routineName);
+        if (NULL == ZwQueryInformationProcess) {
+            DbgPrint("Cannot resolve ZwQueryInformationProcess/n");
+        }
+    }
+
+    PEPROCESS ProcessObject = NULL;
+    status = PsLookupProcessByProcessId(ProcessId, &ProcessObject);   
+    if(!NT_SUCCESS(status))
+        return status;
+
+    HANDLE hProcess = NULL;
+    status = ObOpenObjectByPointer(ProcessObject,                                            
+        OBJ_KERNEL_HANDLE,                                    
+        NULL,                                              
+        GENERIC_READ,              
+        *PsProcessType,    
+        KernelMode,        
+        &hProcess);   
+    
+    if(!NT_SUCCESS(status))        
+        return status;
+
+    //
+    // Step one - get the size we need
+    //
+    status = ZwQueryInformationProcess( hProcess, 
+                                        ProcessImageFileName,
+                                        NULL, // buffer
+                                        0, // buffer size
+                                        &returnedLength);
+    if (STATUS_INFO_LENGTH_MISMATCH != status) {
+        ZwClose(hProcess);
+        return status;
+    }
+    //
+    // Is the passed-in buffer going to be big enough for us?  
+    // This function returns a single contguous buffer model...
+    //
+    bufferLength = returnedLength - sizeof(UNICODE_STRING);
+    
+    if (ProcessImageName->MaximumLength < bufferLength) {
+        ProcessImageName->Length = (USHORT) bufferLength;
+        ZwClose(hProcess);
+        return STATUS_BUFFER_OVERFLOW;
+        
+    }
+    //
+    // If we get here, the buffer IS going to be big enough for us, so 
+    // let's allocate some storage.
+    //
+    buffer = ExAllocatePoolWithTag(PagedPool, returnedLength, 'ipgD');
+    if (NULL == buffer) {
+        ZwClose(hProcess);
+        return STATUS_INSUFFICIENT_RESOURCES;
+        
+    }
+    //
+    // Now lets go get the data
+    //
+    status = ZwQueryInformationProcess( hProcess, 
+                                        ProcessImageFileName,
+                                        buffer,
+                                        returnedLength,
+                                        &returnedLength);
+    if (NT_SUCCESS(status)) {
+        //
+        // Ah, we got what we needed
+        //
+        imageName = (PUNICODE_STRING) buffer;
+        RtlCopyUnicodeString(ProcessImageName, imageName);
+        
+    }
+
+    ZwClose(hProcess);
+    hProcess = NULL;
+    //
+    // free our buffer
+    //
+    ExFreePool(buffer);
+    //
+    // And tell the caller what happened.
+    //    
+    return status;
+    
+}
+
 VOID LoadImageNotifyRoutine
 (
     __in_opt PUNICODE_STRING  FullImageName,
@@ -623,10 +734,16 @@ VOID LoadImageNotifyRoutine
   
         if (GetImageType(ImageInfo->ImageBase, &FileType)) {
 
-			if ((FileType == IMAGE_PE32_SYS || FileType == IMAGE_PE64_SYS) && !ImageInfo->SystemModeImage)
-			{
+			if ((FileType == IMAGE_PE32_SYS || FileType == IMAGE_PE64_SYS) && 
+                !ImageInfo->SystemModeImage) {
+
+                // 查看驱动文件信息时会被调用
 				return;
 			}
+
+            if (RtlSearchString(FullImageName, L"1.exe", FALSE) != NULL) {
+                DbgPrint("Test");
+            }
 
             NTSTATUS    status = 0;
 
@@ -636,6 +753,39 @@ VOID LoadImageNotifyRoutine
             FILE_OBJECT* ImageFileObject = NULL;
             WIN_VER_DETAIL WinVer = GetWindowsVersion();
             if (WinVer >= WINDOWS_VERSION_VISTA ) {
+
+                if ((FileType == IMAGE_PE32_EXE || FileType == IMAGE_PE64_EXE)) {
+
+                    // HANDLE TestHandle = NULL;
+                    // status = ObOpenObjectByPointer(
+                    //     ImageFileObject, 
+                    //     OBJ_FORCE_ACCESS_CHECK, 
+                    //     NULL, 
+                    //     GENERIC_EXECUTE, 
+                    //     *IoFileObjectType, 
+                    //     KernelMode,
+                    //     &TestHandle);
+                    // if (!NT_SUCCESS(status)) {
+                    //     return;
+                    // } else {
+                    //     ZwClose(TestHandle);
+                    // }
+       
+                    // 过滤掉查看PE文件属性这种操作
+                    WCHAR ProcessImagePathBuffer[MAX_FILE_PATH] = {0};
+                    UNICODE_STRING  usProcessImagePath = {0};
+                    RtlInitEmptyUnicodeString(
+                            &usProcessImagePath, 
+                            ProcessImagePathBuffer, 
+                            sizeof(ProcessImagePathBuffer));
+
+                    status = GetProcessImageName(ProcessId, &usProcessImagePath);
+                    if (RtlCompareUnicodeString(&usProcessImagePath, FullImageName, TRUE) != 0) {
+                        return;
+                    }
+ 
+                }
+
                 if (ImageInfo->ExtendedInfoPresent) {
                     IMAGE_INFO_EX* ImageInfoEx = 
                         CONTAINING_RECORD(ImageInfo, IMAGE_INFO_EX, ImageInfo);
@@ -673,9 +823,11 @@ VOID LoadImageNotifyRoutine
                     
                     __try  {
 
-                        ImageFileObject = CONTAINING_RECORD (FullImageName, FILE_OBJECT, FileName);
+                        ImageFileObject = 
+                            CONTAINING_RECORD(FullImageName, FILE_OBJECT, FileName);
             
                         if (ImageFileObject->Type != 5) {
+                            //FILE_OBJECT的这个值是固定的
                             ImageFileObject = NULL;
                         }
 
@@ -713,20 +865,6 @@ VOID LoadImageNotifyRoutine
                 }
 
 
-
-				if ((FileType == IMAGE_PE32_EXE || FileType == IMAGE_PE64_EXE))
-				{
-// 					UNICODE_STRING* path_ = GetImagePathByPID(ProcessId);
-// 					if (path_)
-// 					{
-// 						if (0!=wcsicmp(usImagePath->Buffer, path_->Buffer))
-// 						{
-// 							//是加载资源方式
-// 							return;
-// 						}
-// 						free(path_);
-// 					}
-				}
 
 				//DbgPrint("call g_NotifyRoutine ImageBase=%p \n", ImageInfo->ImageBase);
 

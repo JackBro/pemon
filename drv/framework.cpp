@@ -52,6 +52,7 @@ OnDemoDeny(ULONG ProcessId,
     UNICODE_STRING* FullImagePath, 
     enum DISK_TYPE DeviceType, 
     enum IMAGE_TYPE ImageType,
+    PVOID ImageBase,
     VOID* Context)
 {
     UNICODE_STRING usDeviceType = {0};
