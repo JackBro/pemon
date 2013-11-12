@@ -3,6 +3,7 @@ TARGETPATH=../build/$(_OBJ_DIR)
 TARGETTYPE=DRIVER
 WARNLEVEL=0
 C_DEFINES = $(C_DEFINES)
+LINKER_FLAGS =$(LINKER_FLAGS) -integritycheck
 
 !if $(FREEBUILD)
 MSC_WARNING_LEVEL=/W1
@@ -22,5 +23,4 @@ PRECOMPILED_CXX=1
 SOURCES= framework.cpp \
 	pefilter.cpp \
 	ntpath.cpp
-
-		
+ 

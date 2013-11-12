@@ -61,12 +61,12 @@ NTSTATUS SafeCopyMemory(PVOID ulAddrDst, PVOID ulAddrSrc, ULONG ulLenToCopy)
     pMdlSrc = IoAllocateMdl(ulAddrSrc, ulLenToCopy, FALSE, FALSE, NULL);  
     if ((NULL != pMdlSrc) && (NULL != pMdlDst))  
     {  
-    __try  
+        __try  
         {  
             MmProbeAndLockPages(pMdlDst,UserMode,(LOCK_OPERATION)IoReadAccess);  
             MmProbeAndLockPages(pMdlSrc,KernelMode,(LOCK_OPERATION)(IoWriteAccess|IoReadAccess));  
         }  
-    __except(EXCEPTION_EXECUTE_HANDLER)  
+        __except(EXCEPTION_EXECUTE_HANDLER)  
         {  
             status = GetExceptionCode();
             goto  _SafeCopy_END;  
@@ -627,7 +627,7 @@ NTSTATUS GetProcessImageName(HANDLE ProcessId, PUNICODE_STRING ProcessImageName)
             DbgPrint("Cannot resolve ZwQueryInformationProcess/n");
         }
     }
-
+ 
     PEPROCESS ProcessObject = NULL;
     status = PsLookupProcessByProcessId(ProcessId, &ProcessObject);   
     if(!NT_SUCCESS(status))
@@ -679,6 +679,8 @@ NTSTATUS GetProcessImageName(HANDLE ProcessId, PUNICODE_STRING ProcessImageName)
         return STATUS_INSUFFICIENT_RESOURCES;
         
     }
+    
+    
     //
     // Now lets go get the data
     //
@@ -709,6 +711,65 @@ NTSTATUS GetProcessImageName(HANDLE ProcessId, PUNICODE_STRING ProcessImageName)
     
 }
 
+NTSTATUS 
+GetProcessPEB(HANDLE ProcessId, PPEB* Peb)
+{
+    NTSTATUS status;
+    ULONG returnedLength;
+    PUNICODE_STRING imageName;
+    
+    PAGED_CODE(); // this eliminates the possibility of the IDLE Thread/Process
+    if (NULL == ZwQueryInformationProcess) {
+        UNICODE_STRING routineName;
+        RtlInitUnicodeString(&routineName, L"ZwQueryInformationProcess");
+        ZwQueryInformationProcess = 
+               (QUERY_INFO_PROCESS) MmGetSystemRoutineAddress(&routineName);
+        if (NULL == ZwQueryInformationProcess) {
+            DbgPrint("Cannot resolve ZwQueryInformationProcess/n");
+        }
+    }
+
+    PEPROCESS ProcessObject = NULL;
+    status = PsLookupProcessByProcessId(ProcessId, &ProcessObject);   
+    if(!NT_SUCCESS(status))
+        return status;
+
+    HANDLE hProcess = NULL;
+    status = ObOpenObjectByPointer(ProcessObject,                                            
+        OBJ_KERNEL_HANDLE,                                    
+        NULL,                                              
+        GENERIC_READ,              
+        *PsProcessType,    
+        KernelMode,        
+        &hProcess);   
+    
+    if(!NT_SUCCESS(status))        
+        return status;
+
+    PROCESS_BASIC_INFORMATION ProcessInformation = {0};
+    status = ZwQueryInformationProcess( hProcess, 
+                                        ProcessBasicInformation,
+                                        &ProcessInformation, // buffer
+                                        sizeof(ProcessInformation), // buffer size
+                                        &returnedLength);
+    if (NT_SUCCESS(status)) {
+
+        //
+        // Ah, we got what we needed
+        //
+        *Peb = ProcessInformation.PebBaseAddress;
+    }
+
+    ZwClose(hProcess);
+    hProcess = NULL;
+
+    //
+    // And tell the caller what happened.
+    //    
+    return status;
+}
+
+
 VOID LoadImageNotifyRoutine
 (
     __in_opt PUNICODE_STRING  FullImageName,
@@ -722,176 +783,250 @@ VOID LoadImageNotifyRoutine
         return;
     }
 
-    PVOID pDrvEntry;
     char szFullImageName[260]={0};
-    if(FullImageName!=NULL && MmIsAddressValid(FullImageName))
-    {
-		//DbgPrint("call GetImageType ImageBase=%p \n", ImageInfo->ImageBase);
+    if(FullImageName ==NULL || !MmIsAddressValid(FullImageName)) {
+        return;
+    }
+	//DbgPrint("call GetImageType ImageBase=%p \n", ImageInfo->ImageBase);
 
-        //判断文件类型
+    //判断文件类型
 
-        enum IMAGE_TYPE FileType;
-  
-        if (GetImageType(ImageInfo->ImageBase, &FileType)) {
+    enum IMAGE_TYPE FileType;
 
-			if ((FileType == IMAGE_PE32_SYS || FileType == IMAGE_PE64_SYS) && 
-                !ImageInfo->SystemModeImage) {
+    if (!GetImageType(ImageInfo->ImageBase, &FileType)) {
+        return;
+    }
 
-                // 查看驱动文件信息时会被调用
-				return;
-			}
 
-            NTSTATUS    status = 0;
+    if ((FileType == IMAGE_PE32_SYS || FileType == IMAGE_PE64_SYS) && 
+        !ImageInfo->SystemModeImage) {
 
-            BOOLEAN NeedDereference = FALSE;
+        // 查看驱动文件信息时会被调用
+        return;
+    }
 
-            //判断设备类型
-            FILE_OBJECT* ImageFileObject = NULL;
-            WIN_VER_DETAIL WinVer = GetWindowsVersion();
-            if (WinVer >= WINDOWS_VERSION_VISTA ) {
+    NTSTATUS    status = 0;
 
-                if ((FileType == IMAGE_PE32_EXE || FileType == IMAGE_PE64_EXE)) {
+    BOOLEAN NeedDereference = FALSE;
 
-                    // HANDLE TestHandle = NULL;
-                    // status = ObOpenObjectByPointer(
-                    //     ImageFileObject, 
-                    //     OBJ_FORCE_ACCESS_CHECK, 
-                    //     NULL, 
-                    //     GENERIC_EXECUTE, 
-                    //     *IoFileObjectType, 
-                    //     KernelMode,
-                    //     &TestHandle);
-                    // if (!NT_SUCCESS(status)) {
-                    //     return;
-                    // } else {
-                    //     ZwClose(TestHandle);
-                    // }
-       
-                    // 过滤掉查看PE文件属性这种操作
-                    WCHAR ProcessImagePathBuffer[MAX_FILE_PATH] = {0};
-                    UNICODE_STRING  usProcessImagePath = {0};
-                    RtlInitEmptyUnicodeString(
-                            &usProcessImagePath, 
-                            ProcessImagePathBuffer, 
-                            sizeof(ProcessImagePathBuffer));
+    //判断设备类型
+    FILE_OBJECT* ImageFileObject = NULL;
+    WIN_VER_DETAIL WinVer = GetWindowsVersion();
+    if (WinVer >= WINDOWS_VERSION_VISTA ) {
 
-                    status = GetProcessImageName(ProcessId, &usProcessImagePath);
-                    if (RtlCompareUnicodeString(&usProcessImagePath, FullImageName, TRUE) != 0) {
-                        return;
-                    }
- 
-                }
+        if ((FileType == IMAGE_PE32_EXE || FileType == IMAGE_PE64_EXE)) {
+            //VISTA以后 EXE的过滤不在这里处理
+            return;
+        }
 
-                if (ImageInfo->ExtendedInfoPresent) {
-                    IMAGE_INFO_EX* ImageInfoEx = 
-                        CONTAINING_RECORD(ImageInfo, IMAGE_INFO_EX, ImageInfo);
-                    ImageFileObject = ImageInfoEx->FileObject;
-                }
-            } else {
+        if (ImageInfo->ExtendedInfoPresent) {
+            IMAGE_INFO_EX* ImageInfoEx = 
+                CONTAINING_RECORD(ImageInfo, IMAGE_INFO_EX, ImageInfo);
+            ImageFileObject = ImageInfoEx->FileObject;
+        }
 
-                // XP环境下， 就需要自己获取FILE_OBJECT对象了
-                OBJECT_ATTRIBUTES oa = {0};
-                InitializeObjectAttributes (&oa, FullImageName, 
-                    /*OBJ_CASE_INSENSITIVE |*/ OBJ_KERNEL_HANDLE, NULL, NULL);
 
-                IO_STATUS_BLOCK iosb = {0};
-                HANDLE  FileHandle = NULL;
-                status = ZwOpenFile (&FileHandle, 
-                        GENERIC_READ | SYNCHRONIZE, 
-                        &oa, &iosb, 
-                        FILE_SHARE_READ|FILE_SHARE_DELETE,
-                        FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE);
-                if (NT_SUCCESS(status)) {
-                     status = ObReferenceObjectByHandle(FileHandle,
-                                                0,
-                                                *IoFileObjectType,
-                                                KernelMode,
-                                                (PVOID *)&ImageFileObject,
-                                                NULL );
-                    NeedDereference = TRUE;
-                    ZwClose(FileHandle);
-                    FileHandle = NULL;
 
-                } else {
+    } else {
 
-                    // xp下， 如果路径是\WINDOWS\SYSTEM32\kernel32.dll这样的格式
-                    // 就只能通过这种方式才解决了
-                    
-                    __try  {
+        // XP环境下， 就需要自己获取FILE_OBJECT对象了
+        OBJECT_ATTRIBUTES oa = {0};
+        InitializeObjectAttributes (&oa, FullImageName, 
+            /*OBJ_CASE_INSENSITIVE |*/ OBJ_KERNEL_HANDLE, NULL, NULL);
 
-                        ImageFileObject = 
-                            CONTAINING_RECORD(FullImageName, FILE_OBJECT, FileName);
+        IO_STATUS_BLOCK iosb = {0};
+        HANDLE  FileHandle = NULL;
+        status = ZwOpenFile (&FileHandle, 
+                GENERIC_READ | SYNCHRONIZE, 
+                &oa, &iosb, 
+                FILE_SHARE_READ|FILE_SHARE_DELETE,
+                FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE);
+        if (NT_SUCCESS(status)) {
+             status = ObReferenceObjectByHandle(FileHandle,
+                                        0,
+                                        *IoFileObjectType,
+                                        KernelMode,
+                                        (PVOID *)&ImageFileObject,
+                                        NULL );
+            NeedDereference = TRUE;
+            ZwClose(FileHandle);
+            FileHandle = NULL;
+
+        } else {
+
+            // xp下， 如果路径是\WINDOWS\SYSTEM32\kernel32.dll这样的格式
+            // 就只能通过这种方式才解决了
             
-                        if (ImageFileObject->Type != 5) {
-                            //FILE_OBJECT的这个值是固定的
-                            ImageFileObject = NULL;
-                        }
+            __try  {
 
-                    } __except(EXCEPTION_EXECUTE_HANDLER) {
-
-                        ImageFileObject = NULL;
-                    }  
-                }
-            }
-
-            if (ImageFileObject != NULL) {
-
-                enum DISK_TYPE DeviceType;
-                DeviceType = QueryDiskType(ImageFileObject);
-                if (DeviceType == DT_UNKNOWN) {
-                    DeviceType = GuessUnknownDiskType(FullImageName);
-                }
-
-                WCHAR DosNameBuffer[MAX_FILE_PATH] = {0};
-                UNICODE_STRING usDosName = {0};
-                RtlInitEmptyUnicodeString(&usDosName, DosNameBuffer, sizeof(DosNameBuffer));
-
-                UNICODE_STRING* usImagePath = NULL;
-                //status = VolumeNameToDosName(FullImageName, &usDosName);
-                status = QueryFileDosName(ImageFileObject, &usDosName);
-                if(status == STATUS_SUCCESS) {
-                    usImagePath = &usDosName;
-                } else {
-                    usImagePath = FullImageName;
-                }
-
-                if (NeedDereference ) {
-                    ObDereferenceObject(ImageFileObject);
+                ImageFileObject = 
+                    CONTAINING_RECORD(FullImageName, FILE_OBJECT, FileName);
+    
+                if (ImageFileObject->Type != 5) {
+                    //FILE_OBJECT的这个值是固定的
                     ImageFileObject = NULL;
                 }
 
+            } __except(EXCEPTION_EXECUTE_HANDLER) {
 
-
-				//DbgPrint("call g_NotifyRoutine ImageBase=%p \n", ImageInfo->ImageBase);
-
-                //调用回调函数
-                BOOLEAN IsDeny = !g_NotifyRoutine((ULONG)ProcessId, 
-                        usImagePath, 
-                        DeviceType, 
-                        FileType, ImageInfo->ImageBase, g_NotifyContext);
-
-                //根据回调函数， 决定是否加载
-                if (IsDeny)
-				{
-					//DbgPrint("call DenyLoad ImageBase=%p \n", ImageInfo->ImageBase);
-					DenyLoad(FileType, ImageInfo->ImageBase);
-                }
-            }
+                ImageFileObject = NULL;
+            }  
         }
     }
+
+
+    if (ImageFileObject == NULL) {
+        return;
+    }
+
+    enum DISK_TYPE DeviceType;
+    DeviceType = QueryDiskType(ImageFileObject);
+    if (DeviceType == DT_UNKNOWN) {
+        DeviceType = GuessUnknownDiskType(FullImageName);
+    }
+
+    WCHAR DosNameBuffer[MAX_FILE_PATH] = {0};
+    UNICODE_STRING usDosName = {0};
+    RtlInitEmptyUnicodeString(&usDosName, DosNameBuffer, sizeof(DosNameBuffer));
+
+    UNICODE_STRING* usImagePath = NULL;
+    //status = VolumeNameToDosName(FullImageName, &usDosName);
+    status = QueryFileDosName(ImageFileObject, &usDosName);
+    if(status == STATUS_SUCCESS) {
+        usImagePath = &usDosName;
+    } else {
+        usImagePath = FullImageName;
+    }
+
+    if (NeedDereference ) {
+        ObDereferenceObject(ImageFileObject);
+        ImageFileObject = NULL;
+    }
+
+
+	//DbgPrint("call g_NotifyRoutine ImageBase=%p \n", ImageInfo->ImageBase);
+
+    //调用回调函数
+    BOOLEAN IsDeny = !g_NotifyRoutine((ULONG)ProcessId, 
+            usImagePath, 
+            DeviceType, 
+            FileType, ImageInfo->ImageBase, g_NotifyContext);
+
+    //根据回调函数， 决定是否加载
+    if (IsDeny) {
+		//DbgPrint("call DenyLoad ImageBase=%p \n", ImageInfo->ImageBase);
+		DenyLoad(FileType, ImageInfo->ImageBase);
+    }
 }
+
+#if (NTDDI_VERSION >= NTDDI_VISTA)
+
+VOID CreateProcessNotifyRoutine(
+  PEPROCESS Process,
+  HANDLE ProcessId,
+  PPS_CREATE_NOTIFY_INFO CreateInfo)
+{
+    NTSTATUS status;
+
+    PPEB Peb = NULL;
+    status = GetProcessPEB(ProcessId, &Peb);
+    if (!NT_SUCCESS(status)) {
+        return;
+    }
+
+    if (CreateInfo == NULL) {
+        return;
+    }
+
+    KAPC_STATE State;
+    KeStackAttachProcess(Process, &State);
+
+    PVOID ImageBase = *(PVOID*)((PCHAR)Peb + 8);
+    //PVOID ImageBaseAddress = *(PVOID*)((PCHAR)Process + 0x1b4);
+
+    enum IMAGE_TYPE FileType;
+    if (!GetImageType(ImageBase, &FileType)) {
+        KeUnstackDetachProcess(&State);
+        return;
+    }
+
+
+    BOOLEAN NeedDereference = FALSE;
+    FILE_OBJECT* ImageFileObject = CreateInfo->FileObject;
+    UNICODE_STRING* FullImageName = (UNICODE_STRING*)CreateInfo->ImageFileName;
+
+
+    enum DISK_TYPE DeviceType;
+    DeviceType = QueryDiskType(ImageFileObject);
+    if (DeviceType == DT_UNKNOWN) {
+        DeviceType = GuessUnknownDiskType(FullImageName);
+    }
+
+    WCHAR DosNameBuffer[MAX_FILE_PATH] = {0};
+    UNICODE_STRING usDosName = {0};
+    RtlInitEmptyUnicodeString(&usDosName, DosNameBuffer, sizeof(DosNameBuffer));
+
+    UNICODE_STRING* usImagePath = NULL;
+    //status = VolumeNameToDosName(FullImageName, &usDosName);
+    status = QueryFileDosName(ImageFileObject, &usDosName);
+    if(status == STATUS_SUCCESS) {
+        usImagePath = &usDosName;
+    } else {
+        usImagePath = FullImageName;
+    }
+
+    if (NeedDereference ) {
+        ObDereferenceObject(ImageFileObject);
+        ImageFileObject = NULL;
+    }
+
+    //DbgPrint("call g_NotifyRoutine ImageBase=%p \n", ImageInfo->ImageBase);
+
+    //调用回调函数
+    BOOLEAN IsDeny = !g_NotifyRoutine((ULONG)ProcessId, 
+            usImagePath, 
+            DeviceType, 
+            FileType, ImageBase, g_NotifyContext);
+
+    //根据回调函数， 决定是否加载
+    if (IsDeny) {
+        //DbgPrint("call DenyLoad ImageBase=%p \n", ImageInfo->ImageBase);
+        //DenyLoad(FileType, ImageBase);
+        CreateInfo->CreationStatus = STATUS_UNSUCCESSFUL;
+    }
+
+    KeUnstackDetachProcess(&State);
+}
+
+#endif
+
 
 BOOLEAN
 SetupImageNotify(IMAGE_ROUTINE OnNotify, VOID* Context)
 {
-    g_NotifyRoutine = OnNotify;
-    g_NotifyContext = Context;
+    NTSTATUS status;
+
 
     if (OnNotify == NULL) {
-        PsRemoveLoadImageNotifyRoutine(LoadImageNotifyRoutine);
+        status = PsRemoveLoadImageNotifyRoutine(LoadImageNotifyRoutine);
     } else {
-        PsSetLoadImageNotifyRoutine(LoadImageNotifyRoutine);
+        status = PsSetLoadImageNotifyRoutine(LoadImageNotifyRoutine);
     }
+
+#if (NTDDI_VERSION >= NTDDI_VISTA)
+    if (OnNotify == NULL) {
+        status = PsSetCreateProcessNotifyRoutineEx(CreateProcessNotifyRoutine, TRUE);        
+    } else {
+        status = PsSetCreateProcessNotifyRoutineEx(CreateProcessNotifyRoutine, FALSE);        
+    }
+#endif
+
+    if (!NT_SUCCESS(status)) {
+        return FALSE;
+    }
+
+    g_NotifyRoutine = OnNotify;
+    g_NotifyContext = Context;
 
     return TRUE;
 }
