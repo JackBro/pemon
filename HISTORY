@@ -1,3 +1,6 @@
+0.7
+win7下使用PsSetCreateProcessNotifyRoutineEx来过滤EXE
+
 0.6
 过滤了查看EXE文件属性操作
 过滤了查看驱动版本的操作
